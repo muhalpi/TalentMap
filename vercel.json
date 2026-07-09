@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/internal/quota-reservations/run",
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/internal/retention/run",
+      "schedule": "0 17 * * *"
+    }
+  ]
+}

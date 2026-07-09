@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f5f4;
+  --foreground: #111111;
+  --surface: #ffffff;
+  --surface-muted: #f1f0ef;
+  --border: #e6e6e6;
+  --accent: #0075de;
+  --accent-muted: #e8f3ff;
+  --accent-strong: #005bab;
+  --warning: #dd5b00;
+  --danger: #b42318;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-muted: var(--accent-muted);
+  --color-accent-strong: var(--accent-strong);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  outline-color: var(--accent);
+}
+
+button,
+a {
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+input,
+select,
+textarea {
+  box-shadow: 0 1px 1px rgb(0 0 0 / 0.02);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(0 117 222 / 0.12);
+}
+
+::selection {
+  background: #d9ecff;
+  color: #0b1f35;
+}
