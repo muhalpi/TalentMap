@@ -167,7 +167,7 @@ async function backfillResultsFromLinkedTokens() {
   let updated = 0;
 
   for (const pending of pendingResults) {
-    if (!pending.participantId) {
+    if (!pending.participantId || !pending.tokenId) {
       continue;
     }
 

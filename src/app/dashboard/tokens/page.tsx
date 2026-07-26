@@ -21,19 +21,28 @@ export default async function DashboardTokensPage() {
     <div>
       <header className="border-b border-border pb-5">
         <p className="font-mono text-xs uppercase tracking-wide text-accent">
-          Token operations
+          Assessment access
         </p>
         <h1 className="mt-2 text-3xl font-semibold tracking-normal">
-          Participant Tokens
+          Participant access
         </h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground/65">
-          Generate single-use assessment links and monitor whether participants
-          have started or completed them.
+          Create participant-specific access codes for the shared assessment URL
+          and monitor whether participants have started or completed them.
         </p>
       </header>
 
       <section className="mt-6 grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
         <GenerateTokenPanel
+          assessments={dashboard.quotas
+            .filter((quota) => quota.isEnabled && quota.implemented)
+            .sort((left, right) => left.testName.localeCompare(right.testName))
+            .map((quota) => ({
+              testKey: quota.testKey,
+              testName: quota.testName,
+              version: quota.version,
+              quotaAvailable: quota.quotaAvailable,
+            }))}
           participants={participants
             .filter((participant) => participant.status === "active")
             .map((participant) => ({
@@ -42,11 +51,20 @@ export default async function DashboardTokensPage() {
               email: participant.email,
               employeeId: participant.employeeId,
               externalReference: participant.externalReference,
+              liveTestKeys: participant.liveTestKeys,
             }))}
         />
         <div className="min-w-0">
-          <h2 className="mb-3 text-lg font-semibold">Token Ledger</h2>
-          <TokenTable tokens={dashboard.recentTokens} allowReissue />
+          <h2 className="mb-3 text-lg font-semibold">Access ledger</h2>
+          <p className="mb-3 text-sm leading-6 text-foreground/60">
+            Live assignments stay pinned here even when they are older than the
+            recent activity window.
+          </p>
+          <TokenTable
+            tokens={dashboard.accessTokens}
+            allowReissue
+            allowCancel
+          />
         </div>
       </section>
     </div>

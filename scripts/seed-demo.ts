@@ -1,5 +1,5 @@
 import { config } from "dotenv";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 
 import { getDb } from "../src/db/client";
 import {
@@ -7,10 +7,18 @@ import {
   clientUsers,
   clients,
   internalAdminUsers,
+  participantFieldDefinitions,
+  participants,
+  participantTokens,
   tests,
 } from "../src/db/schema";
-import { generateClientParticipantToken } from "../src/services/token-service";
+import {
+  generateClientParticipantAccess,
+  reissueClientParticipantAccess,
+} from "../src/services/token-service";
+import { bfiDefinition } from "../src/tests/instruments/bfi/definition";
 import { mbtiDefinition } from "../src/tests/instruments/mbti/definition";
+import type { TestDefinition } from "../src/tests/shared/types";
 
 config({ path: ".env.local" });
 
@@ -64,7 +72,9 @@ async function getOrCreateClientUser(clientId: string) {
   const [existing] = await db
     .select()
     .from(clientUsers)
-    .where(and(eq(clientUsers.clientId, clientId), eq(clientUsers.email, email)))
+    .where(
+      and(eq(clientUsers.clientId, clientId), eq(clientUsers.email, email)),
+    )
     .limit(1);
 
   if (existing) {
@@ -84,7 +94,7 @@ async function getOrCreateClientUser(clientId: string) {
   return created;
 }
 
-async function getOrCreateMbtiTest(clientId: string) {
+async function getOrCreateTest(clientId: string, definition: TestDefinition) {
   const db = getDb();
   const [existing] = await db
     .select()
@@ -92,8 +102,8 @@ async function getOrCreateMbtiTest(clientId: string) {
     .where(
       and(
         eq(tests.clientId, clientId),
-        eq(tests.testKey, mbtiDefinition.key),
-        eq(tests.version, mbtiDefinition.version),
+        eq(tests.testKey, definition.key),
+        eq(tests.version, definition.version),
       ),
     )
     .limit(1);
@@ -106,9 +116,9 @@ async function getOrCreateMbtiTest(clientId: string) {
     .insert(tests)
     .values({
       clientId,
-      testKey: mbtiDefinition.key,
-      displayName: mbtiDefinition.name,
-      version: mbtiDefinition.version,
+      testKey: definition.key,
+      displayName: definition.name,
+      version: definition.version,
       isEnabled: true,
     })
     .returning();
@@ -152,6 +162,77 @@ async function ensureQuota(clientId: string, testId: string) {
   });
 }
 
+async function getOrCreateSeedParticipant(clientId: string) {
+  const db = getDb();
+  const email = "participant@example.com";
+  const [existing] = await db
+    .select()
+    .from(participants)
+    .where(
+      and(eq(participants.clientId, clientId), eq(participants.email, email)),
+    )
+    .limit(1);
+
+  if (existing) {
+    return existing;
+  }
+
+  const [created] = await db
+    .insert(participants)
+    .values({
+      clientId,
+      name: "Demo Participant",
+      email,
+      employeeId: "TM-DEMO-001",
+      metadata: {
+        tags: ["demo", "2026 intake"],
+        customFields: {
+          program: "Leadership Development",
+          cohort: "Cohort A",
+        },
+      },
+    })
+    .returning();
+
+  return created;
+}
+
+async function ensureParticipantFields(clientId: string, clientUserId: string) {
+  const db = getDb();
+  await db
+    .insert(participantFieldDefinitions)
+    .values([
+      {
+        clientId,
+        fieldKey: "program",
+        label: "Program",
+        fieldType: "text",
+        displayOrder: 0,
+        createdByClientUserId: clientUserId,
+      },
+      {
+        clientId,
+        fieldKey: "cohort",
+        label: "Cohort",
+        fieldType: "select",
+        options: ["Cohort A", "Cohort B", "Cohort C"],
+        displayOrder: 1,
+        createdByClientUserId: clientUserId,
+      },
+      {
+        clientId,
+        fieldKey: "phone",
+        label: "Phone",
+        fieldType: "phone",
+        isSearchable: false,
+        isSensitive: true,
+        displayOrder: 2,
+        createdByClientUserId: clientUserId,
+      },
+    ])
+    .onConflictDoNothing();
+}
+
 async function seed() {
   const db = getDb();
   const adminEmail = firstAdminEmail();
@@ -167,15 +248,47 @@ async function seed() {
 
   const client = await getOrCreateClient();
   const clientUser = await getOrCreateClientUser(client.clientId);
-  const test = await getOrCreateMbtiTest(client.clientId);
-  await ensureQuota(client.clientId, test.id);
+  await ensureParticipantFields(client.clientId, clientUser.id);
+  const participant = await getOrCreateSeedParticipant(client.clientId);
+  const definitions = [mbtiDefinition, bfiDefinition];
+  const seededTests = [];
 
-  const generated = await generateClientParticipantToken({
-    clientId: client.clientId,
-    testId: test.id,
-    createdByClientUserId: clientUser.id,
-    participantReference: `seed-${Date.now()}`,
-  });
+  for (const definition of definitions) {
+    const test = await getOrCreateTest(client.clientId, definition);
+    await ensureQuota(client.clientId, test.id);
+    seededTests.push(test);
+  }
+
+  const test = seededTests[0];
+
+  if (!test) {
+    throw new Error("No implemented assessments were seeded.");
+  }
+
+  const [liveAssignment] = await db
+    .select({ id: participantTokens.id })
+    .from(participantTokens)
+    .where(
+      and(
+        eq(participantTokens.clientId, client.clientId),
+        eq(participantTokens.participantId, participant.id),
+        eq(participantTokens.testKey, test.testKey),
+        inArray(participantTokens.status, ["active", "in_progress"]),
+      ),
+    )
+    .limit(1);
+  const generated = liveAssignment
+    ? await reissueClientParticipantAccess({
+        clientId: client.clientId,
+        tokenId: liveAssignment.id,
+        requestedByClientUserId: clientUser.id,
+      })
+    : await generateClientParticipantAccess({
+        clientId: client.clientId,
+        testId: test.id,
+        createdByClientUserId: clientUser.id,
+        participantId: participant.id,
+      });
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
 
@@ -185,10 +298,15 @@ async function seed() {
         internalAdminEmail: adminEmail,
         client: client.name,
         clientId: client.clientId,
-        test: test.displayName,
-        testId: test.id,
-        participantUrl: `${appUrl}${generated.urlPath}`,
-        tokenExpiresAt: generated.expiresAt.toISOString(),
+        tests: seededTests.map((seededTest) => ({
+          key: seededTest.testKey,
+          name: seededTest.displayName,
+          version: seededTest.version,
+          testId: seededTest.id,
+        })),
+        assessmentUrl: `${appUrl}${generated.accessPath}`,
+        accessCode: generated.accessCode,
+        accessExpiresAt: generated.expiresAt.toISOString(),
       },
       null,
       2,

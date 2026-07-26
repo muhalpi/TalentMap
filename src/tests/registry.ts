@@ -4,10 +4,11 @@ import type {
   TestDefinition,
   TestKey,
 } from "./shared/types";
+import { bfiDefinition } from "./instruments/bfi/definition";
 import { mbtiDefinition } from "./instruments/mbti/definition";
 
 function plannedInstrument(
-  key: Exclude<TestKey, "mbti">,
+  key: Exclude<TestKey, "mbti" | "bfi">,
   name: string,
   estimatedMinutes: number,
 ): TestDefinition {
@@ -29,7 +30,7 @@ export const testRegistry: Record<TestKey, TestDefinition> = {
   mbti: mbtiDefinition,
   kts2: plannedInstrument("kts2", "KTS-II Questionnaire", 15),
   mmpi: plannedInstrument("mmpi", "MMPI", 60),
-  bfi: plannedInstrument("bfi", "Big Five Inventory", 10),
+  bfi: bfiDefinition,
   sds: plannedInstrument("sds", "Self-Directed Search", 25),
   papi: plannedInstrument("papi", "PAPI", 25),
   disc: plannedInstrument("disc", "DISC Assessment", 12),
@@ -48,4 +49,23 @@ export const testCatalog: TestCatalogItem[] = Object.values(testRegistry).map(
 
 export function getTestDefinition(testKey: string) {
   return testRegistry[testKey as TestKey];
+}
+
+export function isCurrentImplementedTest(
+  testKey: string,
+  version: string,
+) {
+  const definition = getTestDefinition(testKey);
+
+  return Boolean(
+    definition?.implemented && definition.version === version,
+  );
+}
+
+export function currentImplementedTestRows<
+  T extends { testKey: string; version: string },
+>(rows: T[]) {
+  return rows.filter((row) =>
+    isCurrentImplementedTest(row.testKey, row.version),
+  );
 }

@@ -38,7 +38,7 @@ export function ClientContractForm({
     >
       <h2 className="text-lg font-semibold">Contract Settings</h2>
       <p className="mt-1 text-sm leading-6 text-foreground/60">
-        These values control token eligibility, expiry boundaries, and result
+        These values control assessment access eligibility, expiry boundaries, and result
         retention.
       </p>
 

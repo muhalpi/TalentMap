@@ -11,9 +11,20 @@ const clientNav = [
     href: "/dashboard/participants",
     label: "Participants",
     icon: "participants" as const,
+    section: "Manage",
   },
-  { href: "/dashboard/tokens", label: "Tokens", icon: "tokens" as const },
-  { href: "/dashboard/results", label: "Results", icon: "results" as const },
+  {
+    href: "/dashboard/tokens",
+    label: "Assessments & access",
+    icon: "tokens" as const,
+    section: "Manage",
+  },
+  {
+    href: "/dashboard/results",
+    label: "Results",
+    icon: "results" as const,
+    section: "Results & analytics",
+  },
 ];
 
 export default async function DashboardLayout({

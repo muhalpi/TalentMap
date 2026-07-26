@@ -1,5 +1,6 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
 
+import type { ParticipantSessionAccess } from "@/auth/participant-session";
 import { getDb } from "@/db/client";
 import {
   clients,
@@ -11,13 +12,18 @@ import {
   tests,
 } from "@/db/schema";
 import { retentionUntilContractEnd } from "@/db/tenant";
-import { hashParticipantToken } from "@/lib/crypto";
+import { participantCredentialHashes } from "@/lib/crypto";
+import {
+  getDemoTestKey,
+  type DemoTestKey,
+} from "@/lib/demo-test-token";
 import { RETENTION_DELETE_GRACE_DAYS } from "@/lib/retention-policy";
 import { getTestDefinition } from "@/tests/registry";
 import type { AnswerMap, ScoreOutput, TestDefinition } from "@/tests/shared/types";
 
 type TokenStatus = "active" | "in_progress" | "completed" | "expired";
 type ParticipantStatus = "active" | "archived" | "anonymized";
+export type ParticipantAccessCredential = string | ParticipantSessionAccess;
 
 export const PARTICIPANT_CONSENT_VERSION = "talentmap-consent-v1";
 
@@ -26,6 +32,8 @@ export interface ParticipantTestContext {
     id: string;
     status: TokenStatus;
     expiresAt: Date;
+    startedAt: Date | null;
+    accessVersion: number;
   };
   participant: {
     id: string;
@@ -55,6 +63,7 @@ export interface ParticipantTestContext {
 export interface SubmitParticipantResult {
   score: ScoreOutput;
   persisted: boolean;
+  durationSeconds: number;
 }
 
 export interface AcceptParticipantConsentInput {
@@ -69,15 +78,16 @@ export interface AcceptedParticipantConsent {
 
 export interface ParticipantAnswerDraftDto {
   answers: AnswerMap;
+  questionTimings: Record<string, number>;
   currentQuestionIndex: number;
   updatedAt: Date;
 }
 
-function demoContext(): ParticipantTestContext {
-  const definition = getTestDefinition("mbti");
+function demoContext(testKey: DemoTestKey): ParticipantTestContext {
+  const definition = getTestDefinition(testKey);
 
   if (!definition) {
-    throw new Error("Demo MBTI definition is not registered.");
+    throw new Error(`Demo ${testKey} definition is not registered.`);
   }
 
   return {
@@ -85,6 +95,8 @@ function demoContext(): ParticipantTestContext {
       id: "demo-token",
       status: "active",
       expiresAt: new Date("2099-12-31T23:59:59.000Z"),
+      startedAt: null,
+      accessVersion: 1,
     },
     participant: null,
     consent: {
@@ -105,10 +117,6 @@ function demoContext(): ParticipantTestContext {
     definition,
     demo: true,
   };
-}
-
-function isDemoToken(rawToken: string) {
-  return rawToken === "demo-mbti";
 }
 
 function getEffectiveStatus(row: {
@@ -135,10 +143,32 @@ function getEffectiveStatus(row: {
   return row.tokenStatus;
 }
 
-export async function getParticipantTestContext(rawToken: string) {
-  if (isDemoToken(rawToken)) {
-    return demoContext();
+export async function getParticipantTestContext(
+  access: ParticipantAccessCredential,
+) {
+  const demoKey =
+    typeof access === "string"
+      ? getDemoTestKey(access)
+      : access.kind === "demo"
+        ? access.demoKey
+        : null;
+
+  if (demoKey) {
+    return demoContext(demoKey);
   }
+
+  const credentialCondition =
+    typeof access === "string"
+      ? inArray(
+          participantTokens.tokenHash,
+          participantCredentialHashes(access),
+        )
+      : access.kind === "assignment"
+        ? and(
+            eq(participantTokens.id, access.assignmentId),
+            eq(participantTokens.accessVersion, access.accessVersion),
+          )
+        : sql`false`;
 
   const db = getDb();
   const [row] = await db
@@ -147,6 +177,8 @@ export async function getParticipantTestContext(rawToken: string) {
       clientId: participantTokens.clientId,
       tokenStatus: participantTokens.status,
       expiresAt: participantTokens.expiresAt,
+      startedAt: participantTokens.startedAt,
+      accessVersion: participantTokens.accessVersion,
       testId: participantTokens.testId,
       testKey: tests.testKey,
       testName: tests.displayName,
@@ -185,7 +217,7 @@ export async function getParticipantTestContext(rawToken: string) {
         eq(participantConsents.clientId, participantTokens.clientId),
       ),
     )
-    .where(eq(participantTokens.tokenHash, hashParticipantToken(rawToken)))
+    .where(credentialCondition)
     .limit(1);
 
   if (!row || !row.testEnabled) {
@@ -203,6 +235,8 @@ export async function getParticipantTestContext(rawToken: string) {
       id: row.tokenId,
       status: getEffectiveStatus(row),
       expiresAt: row.expiresAt,
+      startedAt: row.startedAt,
+      accessVersion: row.accessVersion,
     },
     participant:
       row.participantId && row.participantName && row.participantStatus
@@ -239,7 +273,7 @@ function assertUsableParticipant(
   participant: NonNullable<ParticipantTestContext["participant"]>;
 } {
   if (!context.participant) {
-    throw new Error("This token is not linked to a participant profile.");
+    throw new Error("This assessment access is not linked to a participant profile.");
   }
 
   if (
@@ -256,11 +290,11 @@ function assertDraftableContext(
   participant: NonNullable<ParticipantTestContext["participant"]>;
 } {
   if (context.token.status === "expired") {
-    throw new Error("The participant token has expired.");
+    throw new Error("This assessment access has expired.");
   }
 
   if (context.token.status === "completed") {
-    throw new Error("The participant token has already been completed.");
+    throw new Error("This assessment has already been completed.");
   }
 
   if (!context.consent.acceptedAt) {
@@ -307,12 +341,36 @@ function normalizeQuestionIndex(
   return Math.min(Math.max(Math.trunc(currentQuestionIndex), 0), maxIndex);
 }
 
+function normalizeQuestionTimings(
+  context: ParticipantTestContext,
+  timings: Record<string, number>,
+) {
+  const questionIds = new Set(
+    context.definition.questions.map((question) => question.id),
+  );
+  const normalized: Record<string, number> = {};
+
+  for (const [questionId, seconds] of Object.entries(timings)) {
+    if (!questionIds.has(questionId)) {
+      throw new Error("Timing data contains an unknown question.");
+    }
+
+    if (!Number.isFinite(seconds) || seconds < 0) {
+      throw new Error("Timing data contains an invalid duration.");
+    }
+
+    normalized[questionId] = Math.min(Math.trunc(seconds), 86_400);
+  }
+
+  return normalized;
+}
+
 function buildConsentTextSnapshot(context: ParticipantTestContext) {
   return [
     `Consent version: ${PARTICIPANT_CONSENT_VERSION}`,
     `Organization: ${context.client.name}`,
     `Assessment: ${context.test.name} (${context.test.version})`,
-    "Data collected: assessment answers, generated score, result interpretation, token activity, timestamp, browser user agent, and hashed IP address when available.",
+    "Data collected: assessment answers, generated score, result interpretation, access activity, timestamp, browser user agent, and hashed IP address when available.",
     "Purpose: administer the assessment, generate talent/personality insights, and provide results to the organization that issued this link.",
     `Retention: results are retained through the contract end date, ${context.client.contractEndsAt.toISOString()}, then anonymized after a ${RETENTION_DELETE_GRACE_DAYS} day grace period if the contract is not renewed.`,
     `Access: authorized users at ${context.client.name} can access participant assessment records.`,
@@ -321,21 +379,21 @@ function buildConsentTextSnapshot(context: ParticipantTestContext) {
 }
 
 export async function acceptParticipantConsent(
-  rawToken: string,
+  access: ParticipantAccessCredential,
   input: AcceptParticipantConsentInput = {},
 ): Promise<AcceptedParticipantConsent> {
-  const context = await getParticipantTestContext(rawToken);
+  const context = await getParticipantTestContext(access);
 
   if (!context) {
-    throw new Error("The participant token is invalid.");
+    throw new Error("Assessment access is invalid or unavailable.");
   }
 
   if (context.token.status === "expired") {
-    throw new Error("The participant token has expired.");
+    throw new Error("This assessment access has expired.");
   }
 
   if (context.token.status === "completed") {
-    throw new Error("The participant token has already been completed.");
+    throw new Error("This assessment has already been completed.");
   }
 
   if (context.demo) {
@@ -378,7 +436,7 @@ export async function acceptParticipantConsent(
     return created;
   }
 
-  const refreshed = await getParticipantTestContext(rawToken);
+  const refreshed = await getParticipantTestContext(access);
 
   if (refreshed?.consent.acceptedAt) {
     return {
@@ -391,8 +449,8 @@ export async function acceptParticipantConsent(
   throw new Error("Unable to record participant consent.");
 }
 
-export async function startParticipantToken(rawToken: string) {
-  const context = await getParticipantTestContext(rawToken);
+export async function startParticipantToken(access: ParticipantAccessCredential) {
+  const context = await getParticipantTestContext(access);
 
   if (!context || context.demo) {
     return context;
@@ -440,17 +498,18 @@ export async function startParticipantToken(rawToken: string) {
     token: {
       ...context.token,
       status: "in_progress" as const,
+      startedAt: now,
     },
   };
 }
 
 export async function getParticipantAnswerDraft(
-  rawToken: string,
+  access: ParticipantAccessCredential,
 ): Promise<ParticipantAnswerDraftDto | null> {
-  const context = await getParticipantTestContext(rawToken);
+  const context = await getParticipantTestContext(access);
 
   if (!context) {
-    throw new Error("The participant token is invalid.");
+    throw new Error("Assessment access is invalid or unavailable.");
   }
 
   if (context.demo) {
@@ -463,6 +522,7 @@ export async function getParticipantAnswerDraft(
   const [draft] = await db
     .select({
       answersJson: participantAnswerDrafts.answersJson,
+      questionTimingsJson: participantAnswerDrafts.questionTimingsJson,
       currentQuestionIndex: participantAnswerDrafts.currentQuestionIndex,
       updatedAt: participantAnswerDrafts.updatedAt,
     })
@@ -488,6 +548,10 @@ export async function getParticipantAnswerDraft(
         ),
       ),
     ),
+    questionTimings: normalizeQuestionTimings(
+      context,
+      draft.questionTimingsJson,
+    ),
     currentQuestionIndex: normalizeQuestionIndex(
       context,
       draft.currentQuestionIndex,
@@ -497,16 +561,17 @@ export async function getParticipantAnswerDraft(
 }
 
 export async function saveParticipantAnswerDraft(
-  rawToken: string,
+  access: ParticipantAccessCredential,
   input: {
     answers: AnswerMap;
+    questionTimings: Record<string, number>;
     currentQuestionIndex: number;
   },
 ): Promise<ParticipantAnswerDraftDto | null> {
-  const context = await getParticipantTestContext(rawToken);
+  const context = await getParticipantTestContext(access);
 
   if (!context) {
-    throw new Error("The participant token is invalid.");
+    throw new Error("Assessment access is invalid or unavailable.");
   }
 
   if (context.demo) {
@@ -517,6 +582,10 @@ export async function saveParticipantAnswerDraft(
 
   const now = new Date();
   const answers = normalizeDraftAnswers(context, input.answers);
+  const questionTimings = normalizeQuestionTimings(
+    context,
+    input.questionTimings,
+  );
   const currentQuestionIndex = normalizeQuestionIndex(
     context,
     input.currentQuestionIndex,
@@ -529,6 +598,7 @@ export async function saveParticipantAnswerDraft(
       participantId: context.participant.id,
       tokenId: context.token.id,
       answersJson: answers,
+      questionTimingsJson: questionTimings,
       currentQuestionIndex,
       updatedAt: now,
     })
@@ -538,12 +608,14 @@ export async function saveParticipantAnswerDraft(
         clientId: context.client.clientId,
         participantId: context.participant.id,
         answersJson: answers,
+        questionTimingsJson: questionTimings,
         currentQuestionIndex,
         updatedAt: now,
       },
     })
     .returning({
       answersJson: participantAnswerDrafts.answersJson,
+      questionTimingsJson: participantAnswerDrafts.questionTimingsJson,
       currentQuestionIndex: participantAnswerDrafts.currentQuestionIndex,
       updatedAt: participantAnswerDrafts.updatedAt,
     });
@@ -572,13 +644,19 @@ export async function saveParticipantAnswerDraft(
         ),
       ),
     ),
+    questionTimings: normalizeQuestionTimings(
+      context,
+      draft.questionTimingsJson,
+    ),
     currentQuestionIndex: draft.currentQuestionIndex,
     updatedAt: draft.updatedAt,
   };
 }
 
-export async function clearParticipantAnswerDraft(rawToken: string) {
-  const context = await getParticipantTestContext(rawToken);
+export async function clearParticipantAnswerDraft(
+  access: ParticipantAccessCredential,
+) {
+  const context = await getParticipantTestContext(access);
 
   if (!context || context.demo) {
     return;
@@ -596,29 +674,50 @@ export async function clearParticipantAnswerDraft(rawToken: string) {
 }
 
 export async function submitParticipantResult(
-  rawToken: string,
+  access: ParticipantAccessCredential,
   answers: AnswerMap,
+  questionTimings: Record<string, number> = {},
 ): Promise<SubmitParticipantResult> {
-  const context = await getParticipantTestContext(rawToken);
+  const context = await getParticipantTestContext(access);
 
   if (!context) {
-    throw new Error("The participant token is invalid.");
+    throw new Error("Assessment access is invalid or unavailable.");
   }
 
   if (context.token.status === "expired") {
-    throw new Error("The participant token has expired.");
+    throw new Error("This assessment access has expired.");
   }
 
   if (context.token.status === "completed") {
-    throw new Error("The participant token has already been completed.");
+    throw new Error("This assessment has already been completed.");
   }
 
   const score = context.definition.score(answers);
+  const normalizedQuestionTimings = normalizeQuestionTimings(
+    context,
+    questionTimings,
+  );
+  const submittedAt = new Date();
+  const durationSeconds = context.token.startedAt
+    ? Math.max(
+        0,
+        Math.min(
+          Math.floor(
+            (submittedAt.getTime() - context.token.startedAt.getTime()) / 1000,
+          ),
+          2_147_483_647,
+        ),
+      )
+    : Object.values(normalizedQuestionTimings).reduce(
+        (total, seconds) => total + seconds,
+        0,
+      );
 
   if (context.demo) {
     return {
       score,
       persisted: false,
+      durationSeconds,
     };
   }
 
@@ -628,7 +727,6 @@ export async function submitParticipantResult(
 
   assertUsableParticipant(context);
 
-  const submittedAt = new Date();
   const db = getDb();
 
   await db.insert(results).values({
@@ -637,6 +735,8 @@ export async function submitParticipantResult(
     tokenId: context.token.id,
     participantId: context.participant.id,
     rawAnswers: answers,
+    questionTimings: normalizedQuestionTimings,
+    durationSeconds,
     scoredResult: score.result,
     scoreSummary: score.summary,
     interpretation: score.interpretation,
@@ -681,5 +781,6 @@ export async function submitParticipantResult(
   return {
     score,
     persisted: true,
+    durationSeconds,
   };
 }

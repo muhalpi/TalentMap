@@ -26,7 +26,7 @@ const tabs: {
 }[] = [
   { key: "contract", label: "Contract", icon: CalendarClock },
   { key: "tests", label: "Tests", icon: ClipboardList },
-  { key: "tokens", label: "Tokens", icon: KeyRound },
+  { key: "tokens", label: "Access", icon: KeyRound },
   { key: "results", label: "Results", icon: BarChart3 },
 ];
 
@@ -156,7 +156,7 @@ export default async function AdminClientDetailPage({
           detail={`${detail.stats.quotaReserved} reserved / ${detail.stats.quotaConsumed} consumed`}
         />
         <StatCard
-          label="Open tokens"
+          label="Live access"
           value={detail.stats.activeTokens + detail.stats.inProgressTokens}
           detail={`${detail.stats.completedTokens} completed / ${detail.stats.expiredTokens} expired`}
         />
@@ -231,11 +231,28 @@ export default async function AdminClientDetailPage({
         ) : null}
 
         {activeTab === "tokens" ? (
-          <TokenTable tokens={detail.recentTokens} />
+          <div>
+            <h2 className="text-lg font-semibold">Access ledger</h2>
+            <p className="mb-3 mt-1 text-sm leading-6 text-foreground/60">
+              Live assignments stay pinned here even when they are older than
+              the recent activity window.
+            </p>
+            <TokenTable
+              tokens={detail.accessTokens}
+              allowReissue
+              allowCancel
+              actionEndpointBase={`/api/admin/clients/${detail.client.clientId}/tokens`}
+            />
+          </div>
         ) : null}
 
         {activeTab === "results" ? (
-          <ResultTable results={detail.recentResults} />
+          <ResultTable
+            results={detail.recentResults}
+            resultBasePath={`/admin/clients/${detail.client.clientId}/results`}
+            exportBasePath={`/api/admin/clients/${detail.client.clientId}/results/export`}
+            linkParticipantProfiles={false}
+          />
         ) : null}
       </section>
     </div>

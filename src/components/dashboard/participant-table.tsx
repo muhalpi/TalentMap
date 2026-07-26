@@ -3,14 +3,15 @@ import { Database, Eye } from "lucide-react";
 
 import type { ParticipantDirectoryItemDto } from "@/services/participant-directory-service";
 
-function metadataLine(row: ParticipantDirectoryItemDto) {
-  const parts = [
-    row.metadata?.role,
-    row.metadata?.department,
-    row.metadata?.location,
-  ].filter(Boolean);
+import { TokenCancelButton } from "./token-cancel-button";
+import { TokenReissueButton } from "./token-reissue-button";
 
-  return parts.length ? parts.join(" / ") : null;
+function metadataLine(row: ParticipantDirectoryItemDto) {
+  return row.customFieldSummary.length
+    ? row.customFieldSummary
+        .map((field) => `${field.label}: ${field.value}`)
+        .join(" · ")
+    : null;
 }
 
 function participantStatusClass(status: ParticipantDirectoryItemDto["status"]) {
@@ -27,17 +28,20 @@ function formatOptionalDate(value: string | null) {
 
 export function ParticipantTable({
   participants,
+  emptyMessage = "No participant profiles yet.",
 }: {
   participants: ParticipantDirectoryItemDto[];
+  emptyMessage?: string;
 }) {
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
-      <div className="hidden grid-cols-[minmax(0,1.2fr)_minmax(180px,0.9fr)_110px_140px_120px] border-b border-border bg-surface-muted px-5 py-3 text-xs font-medium uppercase tracking-wide text-foreground/55 xl:grid">
+      <div className="hidden grid-cols-[minmax(0,1.15fr)_minmax(160px,0.85fr)_96px_124px_minmax(190px,1fr)_82px] gap-3 border-b border-border bg-surface-muted px-5 py-3 text-xs font-medium uppercase tracking-wide text-foreground/55 xl:grid">
         <span>Participant</span>
         <span>Identity</span>
         <span>Assessments</span>
         <span>Last activity</span>
-        <span>Actions</span>
+        <span>Live access</span>
+        <span>Profile</span>
       </div>
       {participants.length ? (
         participants.map((row) => {
@@ -46,7 +50,7 @@ export function ParticipantTable({
           return (
             <div
               key={row.id}
-              className="grid gap-4 border-b border-border px-4 py-4 last:border-b-0 md:grid-cols-2 xl:grid-cols-[minmax(0,1.2fr)_minmax(180px,0.9fr)_110px_140px_120px] xl:items-center xl:gap-0 xl:px-5"
+              className="grid gap-4 border-b border-border px-4 py-4 last:border-b-0 md:grid-cols-2 xl:grid-cols-[minmax(0,1.15fr)_minmax(160px,0.85fr)_96px_124px_minmax(190px,1fr)_82px] xl:items-center xl:gap-3 xl:px-5"
             >
               <div className="min-w-0">
                 <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/45 xl:hidden">
@@ -82,7 +86,13 @@ export function ParticipantTable({
                   {row.email ?? "No email"}
                 </p>
                 <p className="mt-1 truncate font-mono text-xs text-foreground/55">
-                  {row.employeeId ?? row.externalReference ?? row.id}
+                  {row.employeeId ?? row.externalReference ?? "No identifier"}
+                </p>
+                <p
+                  className="mt-1 truncate font-mono text-[11px] text-foreground/40"
+                  title={row.id}
+                >
+                  ID {row.id}
                 </p>
               </div>
 
@@ -105,6 +115,50 @@ export function ParticipantTable({
               </div>
 
               <div className="md:col-span-2 xl:col-span-1">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/45 xl:hidden">
+                  Live access
+                </p>
+                {row.liveAssessments.length ? (
+                  <div className="mt-1 divide-y divide-border/70 xl:mt-0">
+                    {row.liveAssessments.map((assessment) => (
+                      <div
+                        key={assessment.tokenId}
+                        className="flex min-h-10 items-center justify-between gap-2 py-1.5 first:pt-0 last:pb-0"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold">
+                            {assessment.testKey.toUpperCase()}
+                          </p>
+                          <p className="mt-0.5 truncate text-[11px] text-foreground/55">
+                            {assessment.tokenStatus.replace("_", " ")} · until{" "}
+                            {formatOptionalDate(assessment.expiresAt)}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-1.5">
+                          {assessment.canReissue ? (
+                            <TokenReissueButton
+                              tokenId={assessment.tokenId}
+                              assessmentLabel={assessment.testKey.toUpperCase()}
+                            />
+                          ) : null}
+                          {assessment.canCancel ? (
+                            <TokenCancelButton
+                              tokenId={assessment.tokenId}
+                              assessmentLabel={assessment.testKey.toUpperCase()}
+                            />
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs text-foreground/45 xl:mt-0">
+                    No live access
+                  </p>
+                )}
+              </div>
+
+              <div className="md:col-span-2 xl:col-span-1">
                 <Link
                   href={`/dashboard/participants/${row.id}`}
                   className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium text-foreground/75 hover:border-accent hover:text-accent"
@@ -119,9 +173,7 @@ export function ParticipantTable({
       ) : (
         <div className="px-5 py-8">
           <Database className="text-foreground/35" size={22} />
-          <p className="mt-3 text-sm text-foreground/60">
-            No participant profiles yet.
-          </p>
+          <p className="mt-3 text-sm text-foreground/60">{emptyMessage}</p>
         </div>
       )}
     </div>

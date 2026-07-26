@@ -74,7 +74,7 @@ export function ClientCreateForm() {
         <div>
           <h2 className="text-lg font-semibold">Contract Window</h2>
           <p className="mt-1 text-sm leading-6 text-foreground/60">
-            Participant token eligibility and result retention follow these
+            Participant assessment access and result retention follow these
             dates.
           </p>
 

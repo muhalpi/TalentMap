@@ -12,13 +12,19 @@ import {
   FieldError,
   SubmitButton,
 } from "@/components/admin/form-controls";
+import { ParticipantCustomFieldsForm } from "@/components/dashboard/participant-custom-fields-form";
+import type { ParticipantFieldDefinitionDto } from "@/services/participant-field-service";
 
 const initialState: ParticipantActionState = {
   status: "idle",
   message: "",
 };
 
-export function ParticipantCreateForm() {
+export function ParticipantCreateForm({
+  definitions,
+}: {
+  definitions: ParticipantFieldDefinitionDto[];
+}) {
   const [state, formAction] = useActionState(
     createParticipantAction,
     initialState,
@@ -33,7 +39,7 @@ export function ParticipantCreateForm() {
         <div>
           <h2 className="text-lg font-semibold">Add Participant</h2>
           <p className="mt-1 text-sm leading-6 text-foreground/60">
-            Create a client-scoped talent profile.
+            Create a participant profile using your tenant&apos;s fields.
           </p>
         </div>
         <UserPlus className="shrink-0 text-accent" size={20} />
@@ -64,58 +70,52 @@ export function ParticipantCreateForm() {
         </label>
 
         <label className="block text-sm font-medium">
-          Employee ID
+          Identifier
           <input
             name="employeeId"
-            placeholder="EMP-1042"
+            placeholder="STU-1042 or EMP-1042"
             className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 font-mono text-sm"
           />
           <FieldError errors={state.fieldErrors?.employeeId} />
         </label>
+
+        <label className="block text-sm font-medium">
+          External reference
+          <input
+            name="externalReference"
+            placeholder="Optional source-system reference"
+            className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 font-mono text-sm"
+          />
+          <FieldError errors={state.fieldErrors?.externalReference} />
+        </label>
       </div>
 
-      <div className="mt-5 border-t border-border pt-5">
-        <h3 className="text-sm font-semibold">Metadata</h3>
-        <div className="mt-4 grid gap-4">
-          <label className="block text-sm font-medium">
-            Role
-            <input
-              name="role"
-              placeholder="Product Manager"
-              className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm"
-            />
-            <FieldError errors={state.fieldErrors?.role} />
-          </label>
-
-          <label className="block text-sm font-medium">
-            Department
-            <input
-              name="department"
-              placeholder="Product"
-              className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm"
-            />
-            <FieldError errors={state.fieldErrors?.department} />
-          </label>
-
-          <label className="block text-sm font-medium">
-            Location
-            <input
-              name="location"
-              placeholder="Jakarta"
-              className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm"
-            />
-            <FieldError errors={state.fieldErrors?.location} />
-          </label>
-
-          <label className="block text-sm font-medium">
-            Tags
-            <input
-              name="tags"
-              placeholder="leadership, hiring"
-              className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm"
-            />
-            <FieldError errors={state.fieldErrors?.tags} />
-          </label>
+      <div className="mt-5 grid gap-5 border-t border-border pt-5">
+        {definitions.length ? (
+          <div>
+            <h3 className="text-sm font-semibold">Custom profile fields</h3>
+            <div className="mt-4">
+              <ParticipantCustomFieldsForm
+                definitions={definitions}
+                fieldErrors={state.fieldErrors}
+                idPrefix="create-participant"
+              />
+            </div>
+          </div>
+        ) : null}
+        <div>
+          <h3 className="text-sm font-semibold">Tags</h3>
+          <div className="mt-4">
+            <label className="block text-sm font-medium">
+              Tags
+              <input
+                name="tags"
+                placeholder="leadership, hiring"
+                className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm"
+              />
+              <FieldError errors={state.fieldErrors?.tags} />
+            </label>
+          </div>
         </div>
       </div>
 

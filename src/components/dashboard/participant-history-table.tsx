@@ -4,6 +4,10 @@ import { Database, Eye } from "lucide-react";
 import { formatDate, tokenStatusClass } from "@/components/dashboard/status";
 import type { ParticipantAssessmentHistoryDto } from "@/services/participant-directory-service";
 
+import { TokenCancelButton } from "./token-cancel-button";
+import { TokenReissueButton } from "./token-reissue-button";
+import { ResultSourceBadge } from "./result-source-badge";
+
 function resultStatusClass(status: string) {
   if (status === "flagged_for_deletion") {
     return "bg-warning/15 text-warning";
@@ -29,17 +33,28 @@ export function ParticipantHistoryTable({
       {history.length ? (
         history.map((row) => (
           <div
-            key={row.tokenId}
+            key={row.historyId}
             className="grid gap-4 border-b border-border px-4 py-4 last:border-b-0 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_110px_130px_130px_120px] xl:items-center xl:gap-0 xl:px-5"
           >
             <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/45 xl:hidden">
                 Assessment
               </p>
-              <p className="truncate font-medium">{row.testName}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="truncate font-medium">{row.testName}</p>
+                <ResultSourceBadge source={row.source} />
+              </div>
               <p className="mt-1 truncate font-mono text-xs text-foreground/55">
-                {row.testKey.toUpperCase()} /{" "}
-                {row.tokenPreview ?? row.participantReference ?? row.tokenId}
+                {row.source === "xlsx_import"
+                  ? row.importedFileName
+                    ? `Imported from ${row.importedFileName}`
+                    : "Uploaded answers"
+                  : `${row.testKey.toUpperCase()} / ${
+                      row.tokenPreview ??
+                      row.participantReference ??
+                      row.tokenId ??
+                      "Access unavailable"
+                    }`}
               </p>
             </div>
 
@@ -48,11 +63,17 @@ export function ParticipantHistoryTable({
                 Status
               </p>
               <span
-                className={`rounded-full px-2.5 py-1 text-xs font-medium ${tokenStatusClass(
-                  row.tokenStatus,
-                )}`}
+                className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                  row.result
+                    ? resultStatusClass(row.result.retentionStatus)
+                    : row.tokenStatus
+                      ? tokenStatusClass(row.tokenStatus)
+                      : "bg-surface-muted text-foreground/60"
+                }`}
               >
-                {row.result ? row.result.resultLabel : row.tokenStatus}
+                {row.result
+                  ? row.result.resultLabel
+                  : row.tokenStatus?.replace("_", " ") ?? "Unavailable"}
               </span>
             </div>
 
@@ -84,7 +105,7 @@ export function ParticipantHistoryTable({
                 </div>
               ) : (
                 <span className="font-mono text-sm text-foreground/55">
-                  {formatDate(row.expiresAt)}
+                  {row.expiresAt ? formatDate(row.expiresAt) : "—"}
                 </span>
               )}
             </div>
@@ -98,8 +119,23 @@ export function ParticipantHistoryTable({
                   <Eye size={14} />
                   Result
                 </Link>
+              ) : row.tokenId && (row.canReissue || row.canCancel) ? (
+                <div className="flex gap-1.5">
+                  {row.canReissue ? (
+                    <TokenReissueButton
+                      tokenId={row.tokenId}
+                      assessmentLabel={row.testKey.toUpperCase()}
+                    />
+                  ) : null}
+                  {row.canCancel ? (
+                    <TokenCancelButton
+                      tokenId={row.tokenId}
+                      assessmentLabel={row.testKey.toUpperCase()}
+                    />
+                  ) : null}
+                </div>
               ) : (
-                <span className="text-xs text-foreground/45">No result</span>
+                <span className="text-xs text-foreground/45">No action</span>
               )}
             </div>
           </div>

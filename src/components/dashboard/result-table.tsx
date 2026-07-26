@@ -4,6 +4,7 @@ import { Database, Download, Eye } from "lucide-react";
 import type { DashboardResultDto } from "@/services/dashboard-service";
 
 import { formatDate } from "./status";
+import { ResultSourceBadge } from "./result-source-badge";
 
 function participantName(row: DashboardResultDto) {
   return (
@@ -25,10 +26,26 @@ function participantDetail(row: DashboardResultDto) {
   return row.participantReference ?? null;
 }
 
-export function ResultTable({ results }: { results: DashboardResultDto[] }) {
+export function ResultTable({
+  results,
+  resultBasePath = "/dashboard/results",
+  exportBasePath = "/api/dashboard/results/export",
+  allowExport = true,
+  linkParticipantProfiles = true,
+}: {
+  results: DashboardResultDto[];
+  resultBasePath?: string;
+  exportBasePath?: string;
+  allowExport?: boolean;
+  linkParticipantProfiles?: boolean;
+}) {
+  const gridClass = allowExport
+    ? "xl:grid-cols-[minmax(0,1fr)_80px_92px_124px_200px]"
+    : "xl:grid-cols-[minmax(0,1fr)_80px_92px_124px_100px]";
+
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
-      <div className="hidden grid-cols-[minmax(0,1fr)_80px_92px_124px_200px] border-b border-border bg-surface-muted px-5 py-3 text-xs font-medium uppercase tracking-wide text-foreground/55 xl:grid">
+      <div className={`hidden border-b border-border bg-surface-muted px-5 py-3 text-xs font-medium uppercase tracking-wide text-foreground/55 xl:grid ${gridClass}`}>
         <span>Participant</span>
         <span>Test</span>
         <span>Result</span>
@@ -39,13 +56,13 @@ export function ResultTable({ results }: { results: DashboardResultDto[] }) {
         results.map((row) => (
           <div
             key={row.id}
-            className="grid gap-3 border-b border-border px-4 py-4 last:border-b-0 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_80px_92px_124px_200px] xl:items-center xl:gap-0 xl:px-5"
+            className={`grid gap-3 border-b border-border px-4 py-4 last:border-b-0 sm:grid-cols-2 xl:items-center xl:gap-0 xl:px-5 ${gridClass}`}
           >
             <div className="min-w-0">
               <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/45 xl:hidden">
                 Participant
               </p>
-              {row.participant?.profileHref ? (
+              {linkParticipantProfiles && row.participant?.profileHref ? (
                 <Link
                   href={row.participant.profileHref}
                   className="block truncate text-sm font-medium text-accent hover:text-accent-strong"
@@ -67,7 +84,10 @@ export function ResultTable({ results }: { results: DashboardResultDto[] }) {
               <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/45 xl:hidden">
                 Test
               </p>
-              <span className="text-sm">{row.testKey.toUpperCase()}</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-sm">{row.testKey.toUpperCase()}</span>
+                <ResultSourceBadge source={row.source} />
+              </div>
             </div>
             <div>
               <p className="text-[11px] font-medium uppercase tracking-wide text-foreground/45 xl:hidden">
@@ -87,21 +107,23 @@ export function ResultTable({ results }: { results: DashboardResultDto[] }) {
             </div>
             <div className="flex flex-wrap items-center gap-2 sm:col-span-2 xl:col-span-1">
               <Link
-                href={`/dashboard/results/${row.id}`}
+                href={`${resultBasePath}/${row.id}`}
                 className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium text-foreground/75 hover:border-accent hover:text-accent"
               >
                 <Eye size={14} />
                 View
               </Link>
-              <a
-                href={`/api/dashboard/results/export?resultId=${encodeURIComponent(
-                  row.id,
-                )}`}
-                className="inline-flex h-8 items-center gap-2 rounded-full bg-accent px-3 text-xs font-medium text-white shadow-[0_1px_2px_rgb(0_0_0/0.08)] hover:bg-accent-strong"
-              >
-                <Download size={14} />
-                Export CSV
-              </a>
+              {allowExport ? (
+                <a
+                  href={`${exportBasePath}?resultId=${encodeURIComponent(
+                    row.id,
+                  )}`}
+                  className="inline-flex h-8 items-center gap-2 rounded-full bg-accent px-3 text-xs font-medium text-white shadow-[0_1px_2px_rgb(0_0_0/0.08)] hover:bg-accent-strong"
+                >
+                  <Download size={14} />
+                  Export XLSX
+                </a>
+              ) : null}
             </div>
           </div>
         ))
@@ -109,8 +131,8 @@ export function ResultTable({ results }: { results: DashboardResultDto[] }) {
         <div className="px-5 py-8">
           <Database className="text-foreground/35" size={22} />
           <p className="mt-3 text-sm text-foreground/60">
-            No completed assessments yet. Generate a token, complete the MBTI
-            flow, and the result will appear here.
+            No completed assessments yet. Create participant access, complete an
+            assessment, and the result will appear here.
           </p>
         </div>
       )}

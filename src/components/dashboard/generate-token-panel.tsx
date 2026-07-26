@@ -10,12 +10,21 @@ export interface TokenParticipantOption {
   email: string | null;
   employeeId: string | null;
   externalReference: string | null;
+  liveTestKeys: string[];
 }
 
-interface GeneratedToken {
-  participantUrl: string;
-  token: string;
+interface GeneratedAccess {
+  accessUrl: string;
+  accessCode: string;
   expiresAt: string;
+  testKey: string;
+}
+
+export interface TokenAssessmentOption {
+  testKey: string;
+  testName: string;
+  version: string;
+  quotaAvailable: number;
 }
 
 function participantLabel(participant: TokenParticipantOption) {
@@ -26,57 +35,78 @@ function participantLabel(participant: TokenParticipantOption) {
 }
 
 export function GenerateTokenPanel({
+  assessments,
   participants,
 }: {
+  assessments: TokenAssessmentOption[];
   participants: TokenParticipantOption[];
 }) {
   const router = useRouter();
+  const [testKey, setTestKey] = useState(
+    assessments.find((assessment) => assessment.quotaAvailable > 0)?.testKey ??
+      assessments[0]?.testKey ??
+      "",
+  );
   const [participantId, setParticipantId] = useState("");
-  const [participantReference, setParticipantReference] = useState("");
-  const [generated, setGenerated] = useState<GeneratedToken | null>(null);
+  const [generated, setGenerated] = useState<GeneratedAccess | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isPending, startTransition] = useTransition();
+  const selectedAssessment = assessments.find(
+    (assessment) => assessment.testKey === testKey,
+  );
+  const generatedAssessment = assessments.find(
+    (assessment) => assessment.testKey === generated?.testKey,
+  );
+  const selectedParticipant = participants.find(
+    (participant) => participant.id === participantId,
+  );
+  const participantAlreadyHasAssessment = Boolean(
+    selectedParticipant?.liveTestKeys.includes(testKey),
+  );
+  const canGenerate = Boolean(
+    selectedAssessment &&
+      selectedAssessment.quotaAvailable > 0 &&
+      participantId &&
+      !participantAlreadyHasAssessment,
+  );
 
-  function generateToken() {
+  function generateAccess() {
     startTransition(async () => {
       setError(null);
       setCopied(false);
 
-      const fallbackReference = participantReference.trim();
-      const response = await fetch("/api/dashboard/demo/tokens", {
+      const response = await fetch("/api/dashboard/tokens", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          testKey: "mbti",
-          participantId: participantId || undefined,
-          participantReference: participantId
-            ? undefined
-            : fallbackReference || undefined,
+          testKey,
+          participantId,
         }),
       });
       const body = await response.json();
 
       if (!response.ok) {
-        setError(body.error ?? "Unable to generate token.");
+        setError(body.error ?? "Unable to create assessment access.");
         return;
       }
 
       setGenerated(body);
       setParticipantId("");
-      setParticipantReference("");
       router.refresh();
     });
   }
 
-  async function copyUrl() {
+  async function copyInvitation() {
     if (!generated) {
       return;
     }
 
-    await navigator.clipboard.writeText(generated.participantUrl);
+    await navigator.clipboard.writeText(
+      `Assessment: ${generated.accessUrl}\nAccess code: ${generated.accessCode}`,
+    );
     setCopied(true);
   }
 
@@ -84,13 +114,52 @@ export function GenerateTokenPanel({
     <div className="rounded-xl border border-border bg-surface p-5 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold">Generate Token</h2>
-          <p className="mt-1 text-sm text-foreground/60">
-            Issues a real single-use MBTI link for the seeded tenant.
+          <h2 className="text-lg font-semibold">Create assessment access</h2>
+          <p className="mt-1 text-sm leading-6 text-foreground/65">
+            Assign one live assessment of each type to a participant.
           </p>
         </div>
         <Plus className="text-accent" size={20} />
       </div>
+
+      <label className="mt-4 block text-sm font-medium" htmlFor="assessment">
+        Assessment
+      </label>
+      <select
+        id="assessment"
+        value={testKey}
+        onChange={(event) => {
+          const nextTestKey = event.target.value;
+          setTestKey(nextTestKey);
+
+          if (selectedParticipant?.liveTestKeys.includes(nextTestKey)) {
+            setParticipantId("");
+          }
+
+          setGenerated(null);
+          setError(null);
+        }}
+        aria-describedby="assessment-help"
+        className="mt-2 h-11 w-full rounded-md border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        {assessments.length ? null : (
+          <option value="">No assessment available</option>
+        )}
+        {assessments.map((assessment) => (
+          <option
+            key={`${assessment.testKey}-${assessment.version}`}
+            value={assessment.testKey}
+            disabled={assessment.quotaAvailable < 1}
+          >
+            {assessment.testName} — {assessment.quotaAvailable} available
+          </option>
+        ))}
+      </select>
+      <p id="assessment-help" className="mt-2 text-sm leading-5 text-foreground/65">
+        {selectedAssessment
+          ? `${selectedAssessment.version} · ${selectedAssessment.quotaAvailable} assignments available`
+          : "Ask an administrator to enable an assessment and allocate quota."}
+      </p>
 
       <label className="mt-4 block text-sm font-medium" htmlFor="participant">
         Participant
@@ -99,73 +168,91 @@ export function GenerateTokenPanel({
         id="participant"
         value={participantId}
         onChange={(event) => setParticipantId(event.target.value)}
-        className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 text-sm"
+        className="mt-2 h-11 w-full rounded-md border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <option value="">Select participant</option>
         {participants.map((participant) => (
-          <option key={participant.id} value={participant.id}>
+          <option
+            key={participant.id}
+            value={participant.id}
+            disabled={participant.liveTestKeys.includes(testKey)}
+          >
             {participantLabel(participant)}
+            {participant.liveTestKeys.includes(testKey)
+              ? ` — ${testKey.toUpperCase()} already live`
+              : ""}
           </option>
         ))}
       </select>
-
-      <label
-        className="mt-4 block text-sm font-medium"
-        htmlFor="participant-reference"
-      >
-        Legacy reference
-      </label>
-      <input
-        id="participant-reference"
-        value={participantReference}
-        onChange={(event) => setParticipantReference(event.target.value)}
-        placeholder="TM-0042 or employee ID"
-        disabled={Boolean(participantId)}
-        className="mt-2 h-10 w-full rounded-md border border-border bg-surface px-3 font-mono text-sm disabled:cursor-not-allowed disabled:bg-background disabled:text-foreground/45"
-      />
+      <p className="mt-2 text-xs leading-5 text-foreground/55">
+        {participantAlreadyHasAssessment
+          ? `This participant already has a live ${testKey.toUpperCase()} assessment.`
+          : "Completed and expired assignments do not block a new assessment of the same type."}
+      </p>
 
       <button
         type="button"
-        onClick={generateToken}
-        disabled={isPending || (!participantId && !participantReference.trim())}
-        className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-full bg-accent px-4 text-sm font-medium text-white shadow-[0_1px_2px_rgb(0_0_0/0.08)] hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-60"
+        onClick={generateAccess}
+        disabled={isPending || !canGenerate}
+        className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-full bg-accent px-4 text-sm font-medium text-white shadow-[0_1px_2px_rgb(0_0_0/0.08)] hover:bg-accent-strong focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-60"
       >
         {isPending ? (
           <Loader2 className="animate-spin" size={16} />
         ) : (
           <Plus size={16} />
         )}
-        Generate MBTI Token
+        Create access code
       </button>
 
       {error ? (
-        <p className="mt-4 rounded-lg border border-danger/35 bg-danger/10 p-3 text-sm text-danger">
+        <p
+          role="alert"
+          className="mt-4 rounded-lg border border-danger/35 bg-danger/10 p-3 text-sm text-danger"
+        >
           {error}
         </p>
       ) : null}
 
       {generated ? (
-        <div className="mt-4 rounded-lg border border-border bg-background p-3">
-          <p className="text-xs font-medium uppercase tracking-wide text-foreground/55">
-            Participant URL
+        <div
+          aria-live="polite"
+          className="mt-4 rounded-lg border border-border bg-background p-3"
+        >
+          <p className="text-sm font-medium text-foreground/70">
+            {generatedAssessment?.testName ?? generated.testKey.toUpperCase()} access created
           </p>
-          <a
-            href={generated.participantUrl}
-            className="mt-2 block break-all font-mono text-sm text-accent hover:text-accent-strong"
-          >
-            {generated.participantUrl}
-          </a>
+          <div className="mt-3 space-y-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-foreground/50">
+                Shared assessment URL
+              </p>
+              <a
+                href={generated.accessUrl}
+                className="mt-1 block break-all font-mono text-sm text-accent hover:text-accent-strong"
+              >
+                {generated.accessUrl}
+              </a>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase tracking-wide text-foreground/50">
+                Participant access code
+              </p>
+              <p className="mt-1 break-all font-mono text-base font-semibold tracking-wide text-foreground">
+                {generated.accessCode}
+              </p>
+            </div>
+          </div>
           <div className="mt-3 flex items-center justify-between gap-3">
             <p className="font-mono text-xs text-foreground/60">
               Expires {new Date(generated.expiresAt).toLocaleString()}
             </p>
             <button
               type="button"
-              onClick={copyUrl}
+              onClick={copyInvitation}
               className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-surface px-3 text-xs font-medium hover:border-accent hover:text-accent"
             >
               {copied ? <Check size={14} /> : <Clipboard size={14} />}
-              {copied ? "Copied" : "Copy"}
+              {copied ? "Copied" : "Copy invitation"}
             </button>
           </div>
         </div>

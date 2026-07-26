@@ -3,30 +3,42 @@ import { UserPlus, UsersRound } from "lucide-react";
 
 import { requireClientSession } from "@/auth/guards";
 import { ParticipantCreateForm } from "@/components/dashboard/participant-create-form";
+import { ParticipantDirectoryControls } from "@/components/dashboard/participant-directory-controls";
+import { ParticipantFieldManager } from "@/components/dashboard/participant-field-manager";
 import { ParticipantTable } from "@/components/dashboard/participant-table";
-import {
-  getClientDashboardByClientId,
-} from "@/services/dashboard-service";
-import { getClientParticipants } from "@/services/participant-directory-service";
+import { SpreadsheetImportPanel } from "@/components/dashboard/spreadsheet-import-panel";
+import { parseParticipantDirectoryQuery } from "@/lib/participant-directory-query";
+import { getClientDashboardByClientId } from "@/services/dashboard-service";
+import { getClientParticipantDirectory } from "@/services/participant-directory-service";
+import { getClientParticipantFieldDefinitions } from "@/services/participant-field-service";
 
-export default async function DashboardParticipantsPage() {
+export default async function DashboardParticipantsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const session = await requireClientSession();
-  const [dashboard, participants] = await Promise.all([
+  const query = parseParticipantDirectoryQuery(await searchParams);
+  const [dashboard, directory, fieldDefinitions] = await Promise.all([
     getClientDashboardByClientId(session.clientId),
-    getClientParticipants(session.clientId),
+    getClientParticipantDirectory(session.clientId, query),
+    getClientParticipantFieldDefinitions(session.clientId, {
+      includeInactive: true,
+    }),
   ]);
 
   if (!dashboard) {
     notFound();
   }
 
-  const completed = participants.reduce(
-    (sum, participant) => sum + participant.completedAssessmentCount,
-    0,
+  const hasFilters = Boolean(
+    directory.query.search ||
+    directory.query.status !== "all" ||
+    directory.query.activity !== "all" ||
+    directory.query.sort !== "recent",
   );
-  const assigned = participants.reduce(
-    (sum, participant) => sum + participant.tokenCount,
-    0,
+  const activeFieldDefinitions = fieldDefinitions.filter(
+    (field) => field.isActive,
   );
 
   return (
@@ -40,8 +52,8 @@ export default async function DashboardParticipantsPage() {
             Participants
           </h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground/65">
-            {participants.length} profile
-            {participants.length === 1 ? "" : "s"} scoped to{" "}
+            {directory.totalProfiles} profile
+            {directory.totalProfiles === 1 ? "" : "s"} scoped to{" "}
             {dashboard.client.name}.
           </p>
         </div>
@@ -54,7 +66,7 @@ export default async function DashboardParticipantsPage() {
               </p>
             </div>
             <p className="mt-2 font-mono text-2xl font-semibold">
-              {participants.length}
+              {directory.totalProfiles}
             </p>
           </div>
           <div className="rounded-xl border border-border bg-surface px-4 py-3 shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
@@ -65,19 +77,44 @@ export default async function DashboardParticipantsPage() {
               </p>
             </div>
             <p className="mt-2 font-mono text-2xl font-semibold">
-              {completed}/{assigned}
+              {directory.completedAssessments}/{directory.assignedAssessments}
             </p>
           </div>
         </div>
       </header>
 
-      <section className="mt-6 grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <ParticipantCreateForm />
+      <section className="mt-6 grid gap-5 2xl:grid-cols-[380px_minmax(0,1fr)]">
+        <div className="space-y-5">
+          <ParticipantCreateForm definitions={activeFieldDefinitions} />
+          <SpreadsheetImportPanel
+            title="Import Participants"
+            description="Create multiple participant profiles from a structured workbook."
+            endpoint="/api/dashboard/import/participants"
+            templateLinks={[
+              {
+                href: "/api/dashboard/import/templates/participants",
+                label: "Download Template",
+              },
+            ]}
+          />
+        </div>
         <div className="min-w-0">
           <h2 className="mb-3 text-lg font-semibold">Directory</h2>
-          <ParticipantTable participants={participants} />
+          <ParticipantDirectoryControls directory={directory} />
+          <ParticipantTable
+            participants={directory.participants}
+            emptyMessage={
+              hasFilters
+                ? "No participants match the current search and filters."
+                : "No participant profiles yet."
+            }
+          />
         </div>
       </section>
+
+      <div className="mt-6">
+        <ParticipantFieldManager definitions={fieldDefinitions} />
+      </div>
     </div>
   );
 }

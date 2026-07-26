@@ -3,9 +3,15 @@ import { createHmac } from "node:crypto";
 import { sql } from "drizzle-orm";
 
 import { getDb } from "@/db/client";
-import { hashParticipantToken } from "@/lib/crypto";
+import {
+  hashParticipantToken,
+  normalizeParticipantAccessCode,
+} from "@/lib/crypto";
+import { isDemoTestToken } from "@/lib/demo-test-token";
 
 export type TestRateLimitScope =
+  | "test_access_code"
+  | "test_access_ip"
   | "test_page"
   | "test_api_consent"
   | "test_api_start"
@@ -15,10 +21,15 @@ export type TestRateLimitScope =
 
 type HeaderReader = Pick<Headers, "get">;
 
-interface RateLimitPolicy {
+export interface RateLimitPolicy {
   limit: number;
   windowMs: number;
   blockMs: number;
+}
+
+export interface ResolvedTestRateLimitPolicy extends RateLimitPolicy {
+  bucketScope: string;
+  demo: boolean;
 }
 
 interface RateLimitRow extends Record<string, unknown> {
@@ -46,6 +57,16 @@ export class RateLimitExceededError extends Error {
 }
 
 const RATE_LIMIT_POLICIES: Record<TestRateLimitScope, RateLimitPolicy> = {
+  test_access_code: {
+    limit: 8,
+    windowMs: 15 * 60 * 1000,
+    blockMs: 30 * 60 * 1000,
+  },
+  test_access_ip: {
+    limit: 60,
+    windowMs: 15 * 60 * 1000,
+    blockMs: 30 * 60 * 1000,
+  },
   test_page: {
     limit: 80,
     windowMs: 10 * 60 * 1000,
@@ -77,6 +98,62 @@ const RATE_LIMIT_POLICIES: Record<TestRateLimitScope, RateLimitPolicy> = {
     blockMs: 30 * 60 * 1000,
   },
 };
+
+// Demo assessments use public, reusable tokens and generate one draft request
+// per answer. Keep a separate, relaxed bucket so development refreshes,
+// framework prefetches, and repeated demos cannot block real participant flows.
+const DEMO_RATE_LIMIT_POLICIES: Record<
+  TestRateLimitScope,
+  RateLimitPolicy
+> = {
+  test_access_code: RATE_LIMIT_POLICIES.test_access_code,
+  test_access_ip: RATE_LIMIT_POLICIES.test_access_ip,
+  test_page: {
+    limit: 800,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 2 * 60 * 1000,
+  },
+  test_api_consent: {
+    limit: 300,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 2 * 60 * 1000,
+  },
+  test_api_start: {
+    limit: 600,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 2 * 60 * 1000,
+  },
+  test_api_draft: {
+    limit: 2_400,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 2 * 60 * 1000,
+  },
+  test_api_submit: {
+    limit: 200,
+    windowMs: 10 * 60 * 1000,
+    blockMs: 2 * 60 * 1000,
+  },
+  test_invalid_token: RATE_LIMIT_POLICIES.test_invalid_token,
+};
+
+export function resolveTestRateLimitPolicy({
+  rawToken,
+  scope,
+}: {
+  rawToken: string;
+  scope: TestRateLimitScope;
+}): ResolvedTestRateLimitPolicy {
+  const demo = isDemoTestToken(rawToken);
+  const policy = demo
+    ? DEMO_RATE_LIMIT_POLICIES[scope]
+    : RATE_LIMIT_POLICIES[scope];
+
+  return {
+    ...policy,
+    bucketScope: demo ? `demo_${scope}` : scope,
+    demo,
+  };
+}
 
 function rateLimitSecret() {
   return (
@@ -149,13 +226,14 @@ export async function enforceTestTokenRateLimit({
   headers: HeaderReader;
   scope: TestRateLimitScope;
 }) {
-  const policy = RATE_LIMIT_POLICIES[scope];
+  const policy = resolveTestRateLimitPolicy({ rawToken, scope });
+  const { bucketScope } = policy;
   const now = new Date();
   const windowEndsAt = new Date(now.getTime() + policy.windowMs);
   const blockUntil = new Date(now.getTime() + policy.blockMs);
   const tokenHash = hashParticipantToken(rawToken);
   const ipHash = hmac(clientIp(headers));
-  const keyHash = hmac(`${scope}:${ipHash}:${tokenHash}`);
+  const keyHash = hmac(`${bucketScope}:${ipHash}:${tokenHash}`);
   const db = getDb();
   const result = await db.execute<RateLimitRow>(sql`
     insert into test_rate_limit_buckets (
@@ -174,7 +252,7 @@ export async function enforceTestTokenRateLimit({
       ${keyHash},
       ${tokenHash},
       ${ipHash},
-      ${scope},
+      ${bucketScope},
       1,
       ${now},
       ${windowEndsAt},
@@ -243,5 +321,25 @@ export async function enforceInvalidTokenRateLimit({
     rawToken,
     headers,
     scope: "test_invalid_token",
+  });
+}
+
+export async function enforceParticipantAccessRateLimit({
+  accessCode,
+  headers,
+}: {
+  accessCode: string;
+  headers: HeaderReader;
+}) {
+  await enforceTestTokenRateLimit({
+    rawToken: normalizeParticipantAccessCode(accessCode),
+    headers,
+    scope: "test_access_code",
+  });
+
+  await enforceTestTokenRateLimit({
+    rawToken: "participant-access-ip-bucket",
+    headers,
+    scope: "test_access_ip",
   });
 }

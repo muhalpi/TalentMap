@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "tsx --test src/tests/instruments/bfi/scoring.test.ts src/tests/registry.test.ts src/services/test-rate-limit-service.test.ts src/services/access-ledger.test.ts src/services/participant-field-service.test.ts src/services/spreadsheet-workbook.test.ts src/app/api/dashboard/tokens/request.test.ts src/components/dashboard/token-action-response.test.ts src/lib/crypto.test.ts src/lib/participant-directory-query.test.ts src/auth/participant-session.test.ts",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
@@ -16,6 +17,7 @@
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",
     "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
     "lucide-react": "^1.23.0",
     "next": "16.2.10",
     "react": "19.2.4",
@@ -34,5 +36,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.0",
     "typescript": "^5"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

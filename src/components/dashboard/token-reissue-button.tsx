@@ -3,14 +3,27 @@
 import { useState, useTransition } from "react";
 import { Check, Clipboard, Loader2, RefreshCw, X } from "lucide-react";
 
-interface ReissuedToken {
-  participantUrl: string;
-  token: string;
+import {
+  getTokenActionError,
+  getTokenActionNetworkError,
+} from "./token-action-response";
+
+interface ReissuedAccess {
+  accessUrl: string;
+  accessCode: string;
   expiresAt: string;
 }
 
-export function TokenReissueButton({ tokenId }: { tokenId: string }) {
-  const [generated, setGenerated] = useState<ReissuedToken | null>(null);
+export function TokenReissueButton({
+  tokenId,
+  endpointBase = "/api/dashboard/tokens",
+  assessmentLabel = "assessment",
+}: {
+  tokenId: string;
+  endpointBase?: string;
+  assessmentLabel?: string;
+}) {
+  const [generated, setGenerated] = useState<ReissuedAccess | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -22,36 +35,48 @@ export function TokenReissueButton({ tokenId }: { tokenId: string }) {
       return;
     }
 
-    reissueToken();
+    rotateAccess();
   }
 
-  function reissueToken() {
+  function rotateAccess() {
     startTransition(async () => {
       setError(null);
       setCopied(false);
 
-      const response = await fetch(`/api/dashboard/tokens/${tokenId}/reissue`, {
-        method: "POST",
-      });
-      const body = await response.json().catch(() => ({}));
+      try {
+        const response = await fetch(`${endpointBase}/${tokenId}/reissue`, {
+          method: "POST",
+        });
 
-      if (!response.ok) {
-        setError(body.error ?? "Unable to reissue token.");
+        if (!response.ok) {
+          setError(
+            await getTokenActionError(
+              response,
+              "Unable to rotate assessment access.",
+            ),
+          );
+          setDialogOpen(true);
+          return;
+        }
+
+        const body = (await response.json()) as ReissuedAccess;
+        setGenerated(body);
         setDialogOpen(true);
-        return;
+      } catch {
+        setError(getTokenActionNetworkError("rotate"));
+        setDialogOpen(true);
       }
-
-      setGenerated(body);
-      setDialogOpen(true);
     });
   }
 
-  async function copyUrl() {
+  async function copyInvitation() {
     if (!generated) {
       return;
     }
 
-    await navigator.clipboard.writeText(generated.participantUrl);
+    await navigator.clipboard.writeText(
+      `Assessment: ${generated.accessUrl}\nAccess code: ${generated.accessCode}`,
+    );
     setCopied(true);
   }
 
@@ -61,8 +86,16 @@ export function TokenReissueButton({ tokenId }: { tokenId: string }) {
         type="button"
         onClick={handleClick}
         disabled={isPending}
-        aria-label={generated ? "View reissued URL" : "Reissue token URL"}
-        title={generated ? "View reissued URL" : "Reissue token URL"}
+        aria-label={
+          generated
+            ? `View rotated ${assessmentLabel} access`
+            : `Rotate ${assessmentLabel} access code`
+        }
+        title={
+          generated
+            ? `View rotated ${assessmentLabel} access`
+            : `Rotate ${assessmentLabel} access code`
+        }
         className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-foreground/70 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
       >
         {isPending ? (
@@ -80,10 +113,10 @@ export function TokenReissueButton({ tokenId }: { tokenId: string }) {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="font-mono text-xs uppercase tracking-wide text-accent">
-                  {generated ? "New participant URL" : "Reissue failed"}
+                  {generated ? "New participant access" : "Rotation failed"}
                 </p>
                 <h2 className="mt-2 text-lg font-semibold">
-                  {generated ? "URL reissued" : "Token was not reissued"}
+                  {generated ? "Access code rotated" : "Access was not rotated"}
                 </h2>
               </div>
               <button
@@ -99,20 +132,39 @@ export function TokenReissueButton({ tokenId }: { tokenId: string }) {
             {generated ? (
               <>
                 <p className="mt-3 text-sm leading-6 text-foreground/60">
-                  The previous URL is no longer valid.
+                  The previous code and its participant sessions are no longer
+                  valid. In-progress answers remain saved.
                 </p>
-                <a
-                  href={generated.participantUrl}
-                  className="mt-4 block break-all rounded-lg border border-border bg-background p-3 font-mono text-sm leading-6 text-accent hover:text-accent-strong"
-                >
-                  {generated.participantUrl}
-                </a>
+                <div className="mt-4 space-y-3 rounded-lg border border-border bg-background p-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-foreground/50">
+                      Shared assessment URL
+                    </p>
+                    <a
+                      href={generated.accessUrl}
+                      className="mt-1 block break-all font-mono text-sm leading-6 text-accent hover:text-accent-strong"
+                    >
+                      {generated.accessUrl}
+                    </a>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-foreground/50">
+                      New access code
+                    </p>
+                    <p className="mt-1 break-all font-mono text-base font-semibold tracking-wide">
+                      {generated.accessCode}
+                    </p>
+                  </div>
+                </div>
                 <p className="mt-3 font-mono text-xs text-foreground/55">
                   Expires {new Date(generated.expiresAt).toLocaleString()}
                 </p>
               </>
             ) : (
-              <p className="mt-4 rounded-lg border border-danger/35 bg-danger/10 p-3 text-sm text-danger">
+              <p
+                role="alert"
+                className="mt-4 rounded-lg border border-danger/35 bg-danger/10 p-3 text-sm text-danger"
+              >
                 {error}
               </p>
             )}
@@ -128,11 +180,11 @@ export function TokenReissueButton({ tokenId }: { tokenId: string }) {
               {generated ? (
                 <button
                   type="button"
-                  onClick={copyUrl}
+                  onClick={copyInvitation}
                   className="inline-flex h-9 items-center gap-2 rounded-full bg-accent px-4 text-sm font-medium text-white shadow-[0_1px_2px_rgb(0_0_0/0.08)] hover:bg-accent-strong"
                 >
                   {copied ? <Check size={15} /> : <Clipboard size={15} />}
-                  {copied ? "Copied" : "Copy URL"}
+                  {copied ? "Copied" : "Copy invitation"}
                 </button>
               ) : null}
             </div>

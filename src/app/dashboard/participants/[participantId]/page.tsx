@@ -6,8 +6,10 @@ import { requireClientSession } from "@/auth/guards";
 import { ParticipantAnonymizeForm } from "@/components/dashboard/participant-anonymize-form";
 import { ParticipantEditForm } from "@/components/dashboard/participant-edit-form";
 import { ParticipantHistoryTable } from "@/components/dashboard/participant-history-table";
+import { SpreadsheetImportPanel } from "@/components/dashboard/spreadsheet-import-panel";
 import { formatDate } from "@/components/dashboard/status";
 import { getClientParticipantDetail } from "@/services/participant-directory-service";
+import { getClientParticipantFieldDefinitions } from "@/services/participant-field-service";
 
 function statusClass(status: string) {
   if (status === "archived") {
@@ -42,10 +44,10 @@ export default async function ParticipantDetailPage({
 }) {
   const session = await requireClientSession();
   const { participantId } = await params;
-  const participant = await getClientParticipantDetail(
-    session.clientId,
-    participantId,
-  );
+  const [participant, fieldDefinitions] = await Promise.all([
+    getClientParticipantDetail(session.clientId, participantId),
+    getClientParticipantFieldDefinitions(session.clientId),
+  ]);
 
   if (!participant) {
     notFound();
@@ -90,7 +92,7 @@ export default async function ParticipantDetailPage({
         <StatCard
           label="Assigned"
           value={participant.tokenCount}
-          detail="Token records linked"
+          detail="Assessment access records linked"
         />
         <StatCard
           label="Completed"
@@ -99,14 +101,37 @@ export default async function ParticipantDetailPage({
         />
         <StatCard
           label="Latest activity"
-          value={participant.latestActivityAt ? formatDate(participant.latestActivityAt) : "-"}
+          value={
+            participant.latestActivityAt
+              ? formatDate(participant.latestActivityAt)
+              : "-"
+          }
           detail={`Created ${formatDate(participant.createdAt)}`}
         />
       </section>
 
       <section className="mt-6 grid gap-5 lg:grid-cols-[360px_minmax(0,1fr)]">
         <div className="space-y-5">
-          <ParticipantEditForm participant={participant} />
+          <ParticipantEditForm
+            participant={participant}
+            definitions={fieldDefinitions}
+          />
+          <SpreadsheetImportPanel
+            title="Import Test Result"
+            description="Upload raw responses for this participant. TalentMap will score and analyze them."
+            endpoint="/api/dashboard/import/results"
+            participantId={participant.id}
+            templateLinks={[
+              {
+                href: `/api/dashboard/import/templates/results?participantId=${participant.id}&testKey=bfi`,
+                label: "BFI Template",
+              },
+              {
+                href: `/api/dashboard/import/templates/results?participantId=${participant.id}&testKey=mbti`,
+                label: "MBTI Template",
+              },
+            ]}
+          />
           <ParticipantAnonymizeForm participantId={participant.id} />
         </div>
 

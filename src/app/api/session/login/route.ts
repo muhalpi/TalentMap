@@ -16,11 +16,13 @@ const loginSchema = z.object({
 });
 
 function safeRedirectPath(value: string | undefined, role: string) {
-  if (value?.startsWith("/") && !value.startsWith("//")) {
+  const roleRoot = role === "internal_admin" ? "/admin" : "/dashboard";
+
+  if (value === roleRoot || value?.startsWith(`${roleRoot}/`)) {
     return value;
   }
 
-  return role === "internal_admin" ? "/admin" : "/dashboard";
+  return roleRoot;
 }
 
 export async function POST(request: Request) {

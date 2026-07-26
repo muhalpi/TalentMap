@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f6f5f4;
-  --foreground: #111111;
+  --background: #f7f9fc;
+  --foreground: #0f172a;
   --surface: #ffffff;
-  --surface-muted: #f1f0ef;
-  --border: #e6e6e6;
-  --accent: #0075de;
-  --accent-muted: #e8f3ff;
-  --accent-strong: #005bab;
-  --warning: #dd5b00;
-  --danger: #b42318;
+  --surface-muted: #f1f5f9;
+  --border: #e2e8f0;
+  --accent: #2563eb;
+  --accent-muted: #eaf2ff;
+  --accent-strong: #1d4ed8;
+  --warning: #f97316;
+  --danger: #ef4444;
 }
 
 @theme inline {
@@ -33,6 +33,11 @@ body {
   color: var(--foreground);
   font-family: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
   letter-spacing: 0;
+}
+
+html {
+  background: var(--background);
+  scroll-behavior: smooth;
 }
 
 button,
@@ -67,6 +72,32 @@ textarea:focus {
 }
 
 ::selection {
-  background: #d9ecff;
-  color: #0b1f35;
+  background: #dbeafe;
+  color: #172554;
+}
+
+@keyframes dashboard-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dashboard-reveal {
+  animation: dashboard-reveal 420ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

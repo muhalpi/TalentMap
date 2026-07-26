@@ -15,9 +15,9 @@ export function rateLimitJson(error: RateLimitExceededError) {
   );
 }
 
-export function isInvalidParticipantTokenError(error: unknown) {
+export function isInvalidParticipantAccessError(error: unknown) {
   return (
     error instanceof Error &&
-    error.message === "The participant token is invalid."
+    error.message === "Assessment access is invalid or unavailable."
   );
 }

@@ -1,5 +1,6 @@
 import type { DashboardTokenDto } from "@/services/dashboard-service";
 
+import { TokenCancelButton } from "./token-cancel-button";
 import { TokenReissueButton } from "./token-reissue-button";
 import { formatDate, tokenStatusClass } from "./status";
 
@@ -20,17 +21,22 @@ function tokenReferenceDetail(row: DashboardTokenDto) {
 export function TokenTable({
   tokens,
   allowReissue = false,
+  allowCancel = false,
+  actionEndpointBase = "/api/dashboard/tokens",
 }: {
   tokens: DashboardTokenDto[];
   allowReissue?: boolean;
+  allowCancel?: boolean;
+  actionEndpointBase?: string;
 }) {
-  const gridClass = allowReissue
-    ? "grid-cols-[minmax(0,1.1fr)_64px_100px_116px_58px]"
+  const hasActions = allowReissue || allowCancel;
+  const gridClass = hasActions
+    ? "grid-cols-[minmax(0,1.1fr)_64px_100px_116px_92px]"
     : "grid-cols-[0.9fr_0.8fr_0.8fr_1fr]";
 
   return (
     <div className="overflow-x-auto rounded-xl border border-border bg-surface shadow-[0_1px_2px_rgb(0_0_0/0.03)]">
-      <div className={allowReissue ? "min-w-[640px]" : "min-w-[720px]"}>
+      <div className={hasActions ? "min-w-[680px]" : "min-w-[720px]"}>
         <div
           className={`grid ${gridClass} items-center gap-3 border-b border-border bg-surface-muted px-4 py-3 text-xs font-medium uppercase tracking-wide text-foreground/55`}
         >
@@ -38,7 +44,7 @@ export function TokenTable({
           <span>Test</span>
           <span>Status</span>
           <span>Expires</span>
-          {allowReissue ? <span className="text-right">URL</span> : null}
+          {hasActions ? <span className="text-right">Actions</span> : null}
         </div>
         {tokens.length ? (
           tokens.map((row) => {
@@ -70,19 +76,35 @@ export function TokenTable({
                       row.status,
                     )}`}
                   >
-                    {row.status}
+                    {row.status.replace("_", " ")}
                   </span>
                 </span>
                 <span className="font-mono text-sm text-foreground/65">
                   {formatDate(row.expiresAt)}
                 </span>
-                {allowReissue ? (
-                  row.canReissue ? (
-                    <TokenReissueButton tokenId={row.id} />
+                {hasActions ? (
+                  (allowReissue && row.canReissue) ||
+                  (allowCancel && row.canCancel) ? (
+                    <div className="flex justify-end gap-1.5">
+                      {allowReissue && row.canReissue ? (
+                        <TokenReissueButton
+                          tokenId={row.id}
+                          endpointBase={actionEndpointBase}
+                          assessmentLabel={row.testKey.toUpperCase()}
+                        />
+                      ) : null}
+                      {allowCancel && row.canCancel ? (
+                        <TokenCancelButton
+                          tokenId={row.id}
+                          endpointBase={actionEndpointBase}
+                          assessmentLabel={row.testKey.toUpperCase()}
+                        />
+                      ) : null}
+                    </div>
                   ) : (
                     <span
                       className="block text-right text-xs leading-5 text-foreground/35"
-                      title="Only unused active links can be reissued."
+                      title="Actions are available only for live assessment access."
                     >
                       -
                     </span>
@@ -93,7 +115,7 @@ export function TokenTable({
           })
         ) : (
           <p className="px-5 py-8 text-sm text-foreground/60">
-            No participant tokens have been generated yet.
+            No participant assessment access has been created yet.
           </p>
         )}
       </div>

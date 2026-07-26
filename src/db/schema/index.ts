@@ -40,10 +40,27 @@ export const retentionStatusEnum = pgEnum("retention_status", [
   "deleted",
 ]);
 
+export const resultSourceEnum = pgEnum("result_source", [
+  "platform_assessment",
+  "xlsx_import",
+]);
+
 export const participantStatusEnum = pgEnum("participant_status", [
   "active",
   "archived",
   "anonymized",
+]);
+
+export const participantFieldTypeEnum = pgEnum("participant_field_type", [
+  "text",
+  "long_text",
+  "number",
+  "date",
+  "email",
+  "phone",
+  "select",
+  "multi_select",
+  "boolean",
 ]);
 
 export const internalAdminUsers = pgTable("internal_admin_users", {
@@ -77,7 +94,10 @@ export const clients = pgTable(
       .defaultNow(),
   },
   (table) => [
-    check("clients_contract_window", sql`${table.contractEndsAt} >= ${table.contractStartsAt}`),
+    check(
+      "clients_contract_window",
+      sql`${table.contractEndsAt} >= ${table.contractStartsAt}`,
+    ),
   ],
 );
 
@@ -158,12 +178,76 @@ export const clientTestQuotas = pgTable(
     ),
     check("client_test_quotas_total_positive", sql`${table.quotaTotal} >= 0`),
     check("client_test_quotas_used_non_negative", sql`${table.quotaUsed} >= 0`),
-    check("client_test_quotas_reserved_non_negative", sql`${table.quotaReserved} >= 0`),
-    check("client_test_quotas_consumed_non_negative", sql`${table.quotaConsumed} >= 0`),
-    check("client_test_quotas_used_lte_total", sql`${table.quotaUsed} <= ${table.quotaTotal}`),
+    check(
+      "client_test_quotas_reserved_non_negative",
+      sql`${table.quotaReserved} >= 0`,
+    ),
+    check(
+      "client_test_quotas_consumed_non_negative",
+      sql`${table.quotaConsumed} >= 0`,
+    ),
+    check(
+      "client_test_quotas_used_lte_total",
+      sql`${table.quotaUsed} <= ${table.quotaTotal}`,
+    ),
     check(
       "client_test_quotas_reserved_consumed_lte_total",
       sql`${table.quotaReserved} + ${table.quotaConsumed} <= ${table.quotaTotal}`,
+    ),
+  ],
+);
+
+export const participantFieldDefinitions = pgTable(
+  "participant_field_definitions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.clientId, { onDelete: "cascade" }),
+    fieldKey: text("field_key").notNull(),
+    label: text("label").notNull(),
+    fieldType: participantFieldTypeEnum("field_type").notNull(),
+    options: jsonb("options")
+      .$type<string[]>()
+      .notNull()
+      .default(sql`'[]'::jsonb`),
+    isRequired: boolean("is_required").notNull().default(false),
+    isSearchable: boolean("is_searchable").notNull().default(true),
+    isSensitive: boolean("is_sensitive").notNull().default(false),
+    isActive: boolean("is_active").notNull().default(true),
+    displayOrder: integer("display_order").notNull().default(0),
+    createdByClientUserId: uuid("created_by_client_user_id").references(
+      () => clientUsers.id,
+      { onDelete: "set null" },
+    ),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("participant_field_definitions_client_key_unique").on(
+      table.clientId,
+      table.fieldKey,
+    ),
+    index("participant_field_definitions_client_active_order_idx").on(
+      table.clientId,
+      table.isActive,
+      table.displayOrder,
+    ),
+    check(
+      "participant_field_definitions_key_format",
+      sql`${table.fieldKey} ~ '^[a-z][a-z0-9_]{0,62}$'`,
+    ),
+    check(
+      "participant_field_definitions_display_order_non_negative",
+      sql`${table.displayOrder} >= 0`,
+    ),
+    check(
+      "participant_field_definitions_options_array",
+      sql`jsonb_typeof(${table.options}) = 'array'`,
     ),
   ],
 );
@@ -214,11 +298,13 @@ export const participantTokens = pgTable(
     testId: uuid("test_id")
       .notNull()
       .references(() => tests.id, { onDelete: "restrict" }),
+    testKey: text("test_key").notNull(),
     participantId: uuid("participant_id").references(() => participants.id, {
       onDelete: "set null",
     }),
     tokenHash: text("token_hash").notNull().unique(),
     tokenPreview: text("token_preview"),
+    accessVersion: integer("access_version").notNull().default(1),
     participantReference: text("participant_reference"),
     status: tokenStatusEnum("status").notNull().default("active"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -242,7 +328,15 @@ export const participantTokens = pgTable(
       table.clientId,
       table.participantId,
     ),
-    index("participant_tokens_client_test_idx").on(table.clientId, table.testId),
+    index("participant_tokens_client_test_idx").on(
+      table.clientId,
+      table.testId,
+    ),
+    uniqueIndex("participant_tokens_live_participant_test_key_unique")
+      .on(table.clientId, table.participantId, table.testKey)
+      .where(
+        sql`${table.participantId} is not null and ${table.status} in ('active', 'in_progress')`,
+      ),
     index("participant_tokens_expires_idx").on(table.expiresAt),
   ],
 );
@@ -291,6 +385,10 @@ export const participantAnswerDrafts = pgTable(
     answersJson: jsonb("answers_json")
       .$type<Record<string, unknown>>()
       .notNull(),
+    questionTimingsJson: jsonb("question_timings_json")
+      .$type<Record<string, number>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     currentQuestionIndex: integer("current_question_index")
       .notNull()
       .default(0),
@@ -372,8 +470,7 @@ export const testRateLimitBuckets = pgTable(
     windowStart: timestamp("window_start", { withTimezone: true })
       .notNull()
       .defaultNow(),
-    windowEndsAt: timestamp("window_ends_at", { withTimezone: true })
-      .notNull(),
+    windowEndsAt: timestamp("window_ends_at", { withTimezone: true }).notNull(),
     blockedUntil: timestamp("blocked_until", { withTimezone: true }),
     lastRequestAt: timestamp("last_request_at", { withTimezone: true })
       .notNull()
@@ -404,15 +501,24 @@ export const results = pgTable(
       .notNull()
       .references(() => tests.id, { onDelete: "restrict" }),
     tokenId: uuid("token_id")
-      .notNull()
       .unique()
       .references(() => participantTokens.id, { onDelete: "restrict" }),
     participantId: uuid("participant_id").references(() => participants.id, {
       onDelete: "set null",
     }),
-    rawAnswers: jsonb("raw_answers")
-      .$type<Record<string, string>>()
-      .notNull(),
+    source: resultSourceEnum("source").notNull().default("platform_assessment"),
+    importedByClientUserId: uuid("imported_by_client_user_id").references(
+      () => clientUsers.id,
+      { onDelete: "set null" },
+    ),
+    importedFileName: text("imported_file_name"),
+    importedAt: timestamp("imported_at", { withTimezone: true }),
+    rawAnswers: jsonb("raw_answers").$type<Record<string, string>>().notNull(),
+    questionTimings: jsonb("question_timings")
+      .$type<Record<string, number>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
+    durationSeconds: integer("duration_seconds").notNull().default(0),
     scoredResult: jsonb("scored_result")
       .$type<Record<string, unknown>>()
       .notNull(),
@@ -421,8 +527,9 @@ export const results = pgTable(
     submittedAt: timestamp("submitted_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
-    retentionUntil: timestamp("retention_until", { withTimezone: true })
-      .notNull(),
+    retentionUntil: timestamp("retention_until", {
+      withTimezone: true,
+    }).notNull(),
     retentionStatus: retentionStatusEnum("retention_status")
       .notNull()
       .default("active"),
@@ -434,9 +541,19 @@ export const results = pgTable(
       table.clientId,
       table.participantId,
     ),
+    index("results_client_source_idx").on(table.clientId, table.source),
+    index("results_imported_by_idx").on(table.importedByClientUserId),
     index("results_retention_idx").on(
       table.retentionUntil,
       table.retentionStatus,
+    ),
+    check(
+      "results_duration_seconds_non_negative",
+      sql`${table.durationSeconds} >= 0`,
+    ),
+    check(
+      "results_source_integrity",
+      sql`(${table.source} = 'platform_assessment' and ${table.tokenId} is not null) or (${table.source} = 'xlsx_import' and ${table.tokenId} is null and ${table.importedAt} is not null)`,
     ),
   ],
 );
@@ -445,6 +562,7 @@ export const clientsRelations = relations(clients, ({ many }) => ({
   users: many(clientUsers),
   tests: many(tests),
   participants: many(participants),
+  participantFieldDefinitions: many(participantFieldDefinitions),
   tokens: many(participantTokens),
   participantConsents: many(participantConsents),
   participantAnswerDrafts: many(participantAnswerDrafts),
@@ -462,17 +580,34 @@ export const testsRelations = relations(tests, ({ one, many }) => ({
   results: many(results),
 }));
 
-export const participantsRelations = relations(participants, ({ one, many }) => ({
-  client: one(clients, {
-    fields: [participants.clientId],
-    references: [clients.clientId],
+export const participantsRelations = relations(
+  participants,
+  ({ one, many }) => ({
+    client: one(clients, {
+      fields: [participants.clientId],
+      references: [clients.clientId],
+    }),
+    tokens: many(participantTokens),
+    consents: many(participantConsents),
+    answerDrafts: many(participantAnswerDrafts),
+    anonymizationAudits: many(participantAnonymizationAudits),
+    results: many(results),
   }),
-  tokens: many(participantTokens),
-  consents: many(participantConsents),
-  answerDrafts: many(participantAnswerDrafts),
-  anonymizationAudits: many(participantAnonymizationAudits),
-  results: many(results),
-}));
+);
+
+export const participantFieldDefinitionsRelations = relations(
+  participantFieldDefinitions,
+  ({ one }) => ({
+    client: one(clients, {
+      fields: [participantFieldDefinitions.clientId],
+      references: [clients.clientId],
+    }),
+    createdByClientUser: one(clientUsers, {
+      fields: [participantFieldDefinitions.createdByClientUserId],
+      references: [clientUsers.id],
+    }),
+  }),
+);
 
 export const participantTokensRelations = relations(
   participantTokens,
@@ -571,5 +706,9 @@ export const resultsRelations = relations(results, ({ one }) => ({
   participant: one(participants, {
     fields: [results.participantId],
     references: [participants.id],
+  }),
+  importedByClientUser: one(clientUsers, {
+    fields: [results.importedByClientUserId],
+    references: [clientUsers.id],
   }),
 }));

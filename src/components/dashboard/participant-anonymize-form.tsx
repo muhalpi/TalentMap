@@ -54,7 +54,7 @@ export function ParticipantAnonymizeForm({
         <div>
           <h2 className="text-lg font-semibold">Anonymization</h2>
           <p className="mt-1 text-sm leading-6 text-foreground/60">
-            Wipes identity fields, removes drafts, expires open links, and
+            Wipes identity fields, removes drafts, expires live access, and
             keeps retained results only as unlinked records.
           </p>
         </div>

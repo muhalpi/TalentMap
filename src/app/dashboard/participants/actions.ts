@@ -9,6 +9,13 @@ import { requireClientSession } from "@/auth/guards";
 import { getDb } from "@/db/client";
 import { participants } from "@/db/schema";
 import { anonymizeParticipant } from "@/services/participant-anonymization-service";
+import {
+  buildParticipantMetadata,
+  getClientParticipantFieldDefinitions,
+  parseParticipantCustomFieldFormData,
+  parseParticipantTags,
+  participantCustomFieldValues,
+} from "@/services/participant-field-service";
 
 export interface ParticipantActionState {
   status: "idle" | "success" | "error";
@@ -22,36 +29,27 @@ const idleState: ParticipantActionState = {
 };
 
 const optionalText = (max: number) =>
-  z.preprocess(
-    (value) => {
-      if (typeof value !== "string") {
-        return undefined;
-      }
+  z.preprocess((value) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
 
-      const trimmed = value.trim();
-      return trimmed ? trimmed : undefined;
-    },
-    z.string().max(max).optional(),
-  );
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }, z.string().max(max).optional());
 
 const participantFormSchema = z.object({
   name: z.string().trim().min(2, "Participant name is required.").max(180),
-  email: z.preprocess(
-    (value) => {
-      if (typeof value !== "string") {
-        return undefined;
-      }
+  email: z.preprocess((value) => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
 
-      const trimmed = value.trim().toLowerCase();
-      return trimmed ? trimmed : undefined;
-    },
-    z.string().email("Use a valid email.").max(180).optional(),
-  ),
+    const trimmed = value.trim().toLowerCase();
+    return trimmed ? trimmed : undefined;
+  }, z.string().email("Use a valid email.").max(180).optional()),
   employeeId: optionalText(120),
   externalReference: optionalText(120),
-  role: optionalText(140),
-  department: optionalText(140),
-  location: optionalText(140),
   tags: optionalText(240),
 });
 
@@ -72,11 +70,17 @@ function readString(formData: FormData, key: string) {
   return typeof value === "string" ? value : "";
 }
 
-function validationState(error: z.ZodError): ParticipantActionState {
+function validationState(
+  error: z.ZodError | null,
+  customFieldErrors: Record<string, string[]> = {},
+): ParticipantActionState {
   return {
     status: "error",
     message: "Check the highlighted fields and try again.",
-    fieldErrors: error.flatten().fieldErrors,
+    fieldErrors: {
+      ...(error?.flatten().fieldErrors ?? {}),
+      ...customFieldErrors,
+    },
   };
 }
 
@@ -87,57 +91,32 @@ function errorState(message: string): ParticipantActionState {
   };
 }
 
-function parseMetadata(input: {
-  role?: string;
-  department?: string;
-  location?: string;
-  tags?: string;
-}) {
-  const metadata: Record<string, string | string[]> = {};
-
-  if (input.role) {
-    metadata.role = input.role;
-  }
-
-  if (input.department) {
-    metadata.department = input.department;
-  }
-
-  if (input.location) {
-    metadata.location = input.location;
-  }
-
-  const tags = input.tags
-    ?.split(",")
-    .map((tag) => tag.trim())
-    .filter(Boolean);
-
-  if (tags?.length) {
-    metadata.tags = tags;
-  }
-
-  return Object.keys(metadata).length ? metadata : null;
-}
-
 export async function createParticipantAction(
   _previousState: ParticipantActionState = idleState,
   formData: FormData,
 ): Promise<ParticipantActionState> {
   void _previousState;
   const session = await requireClientSession();
+  const definitions = await getClientParticipantFieldDefinitions(
+    session.clientId,
+  );
   const parsed = participantFormSchema.safeParse({
     name: readString(formData, "name"),
     email: readString(formData, "email"),
     employeeId: readString(formData, "employeeId"),
     externalReference: readString(formData, "externalReference"),
-    role: readString(formData, "role"),
-    department: readString(formData, "department"),
-    location: readString(formData, "location"),
     tags: readString(formData, "tags"),
   });
+  const customFields = parseParticipantCustomFieldFormData(
+    definitions,
+    formData,
+  );
 
-  if (!parsed.success) {
-    return validationState(parsed.error);
+  if (!parsed.success || Object.keys(customFields.fieldErrors).length) {
+    return validationState(
+      parsed.success ? null : parsed.error,
+      customFields.fieldErrors,
+    );
   }
 
   const db = getDb();
@@ -172,7 +151,7 @@ export async function createParticipantAction(
       .limit(1);
 
     if (employeeConflict) {
-      return errorState("A participant with that employee ID already exists.");
+      return errorState("A participant with that identifier already exists.");
     }
   }
 
@@ -189,7 +168,9 @@ export async function createParticipantAction(
       .limit(1);
 
     if (referenceConflict) {
-      return errorState("A participant with that external reference already exists.");
+      return errorState(
+        "A participant with that external reference already exists.",
+      );
     }
   }
 
@@ -201,13 +182,18 @@ export async function createParticipantAction(
       email: parsed.data.email ?? null,
       employeeId: parsed.data.employeeId ?? null,
       externalReference: parsed.data.externalReference ?? null,
-      metadata: parseMetadata(parsed.data),
+      metadata: buildParticipantMetadata(
+        parseParticipantTags(parsed.data.tags ?? ""),
+        customFields.values,
+      ),
     })
     .returning({ id: participants.id })
     .catch(() => []);
 
   if (!created) {
-    return errorState("Participant could not be created. Check for duplicates.");
+    return errorState(
+      "Participant could not be created. Check for duplicates.",
+    );
   }
 
   revalidatePath("/dashboard");
@@ -228,24 +214,32 @@ export async function updateParticipantAction(
     return errorState("Participant identifier is invalid.");
   }
 
+  const definitions = await getClientParticipantFieldDefinitions(
+    session.clientId,
+    { includeInactive: true },
+  );
   const parsed = participantFormSchema.safeParse({
     name: readString(formData, "name"),
     email: readString(formData, "email"),
     employeeId: readString(formData, "employeeId"),
     externalReference: readString(formData, "externalReference"),
-    role: readString(formData, "role"),
-    department: readString(formData, "department"),
-    location: readString(formData, "location"),
     tags: readString(formData, "tags"),
   });
+  const customFields = parseParticipantCustomFieldFormData(
+    definitions,
+    formData,
+  );
 
-  if (!parsed.success) {
-    return validationState(parsed.error);
+  if (!parsed.success || Object.keys(customFields.fieldErrors).length) {
+    return validationState(
+      parsed.success ? null : parsed.error,
+      customFields.fieldErrors,
+    );
   }
 
   const db = getDb();
   const [existing] = await db
-    .select({ id: participants.id })
+    .select({ id: participants.id, metadata: participants.metadata })
     .from(participants)
     .where(
       and(
@@ -293,7 +287,7 @@ export async function updateParticipantAction(
       .limit(1);
 
     if (employeeConflict) {
-      return errorState("A participant with that employee ID already exists.");
+      return errorState("A participant with that identifier already exists.");
     }
   }
 
@@ -311,9 +305,20 @@ export async function updateParticipantAction(
       .limit(1);
 
     if (referenceConflict) {
-      return errorState("A participant with that external reference already exists.");
+      return errorState(
+        "A participant with that external reference already exists.",
+      );
     }
   }
+
+  const mergedCustomFields = participantCustomFieldValues(
+    existing.metadata,
+    definitions,
+  );
+  for (const definition of definitions.filter((field) => field.isActive)) {
+    delete mergedCustomFields[definition.fieldKey];
+  }
+  Object.assign(mergedCustomFields, customFields.values);
 
   const [updated] = await db
     .update(participants)
@@ -322,7 +327,10 @@ export async function updateParticipantAction(
       email: parsed.data.email ?? null,
       employeeId: parsed.data.employeeId ?? null,
       externalReference: parsed.data.externalReference ?? null,
-      metadata: parseMetadata(parsed.data),
+      metadata: buildParticipantMetadata(
+        parseParticipantTags(parsed.data.tags ?? ""),
+        mergedCustomFields,
+      ),
       updatedAt: new Date(),
     })
     .where(
@@ -337,7 +345,9 @@ export async function updateParticipantAction(
     .catch(() => []);
 
   if (!updated) {
-    return errorState("Participant could not be updated. Check for duplicates.");
+    return errorState(
+      "Participant could not be updated. Check for duplicates.",
+    );
   }
 
   revalidatePath("/dashboard");
