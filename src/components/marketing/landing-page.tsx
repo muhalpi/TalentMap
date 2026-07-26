@@ -97,10 +97,32 @@ const safeguards = [
   },
 ];
 
-const assessmentLabels: Record<string, string> = {
-  mbti: "Personality type",
-  bfi: "Work-style dimensions",
+// Optional marketing copy per instrument. Anything missing falls back to the
+// registry entry itself, so a newly implemented instrument appears in this
+// section without a code change here.
+const assessmentCopy: Record<string, { category: string; summary: string }> = {
+  mbti: {
+    category: "Personality type",
+    summary:
+      "A structured personality-type assessment with a clear type profile and detailed interpretation.",
+  },
+  bfi: {
+    category: "Work-style dimensions",
+    summary:
+      "A work-style profile across five dimensions using a plain-English 50-item assessment.",
+  },
+  disc: {
+    category: "Work behavior styles",
+    summary:
+      "A forced-choice work behavior profile covering Dominance, Influence, Steadiness, and Conscientiousness across three graphs.",
+  },
 };
+
+const assessmentTones = [
+  "bg-blue-50 text-blue-700",
+  "bg-emerald-50 text-emerald-700",
+  "bg-violet-50 text-violet-700",
+];
 
 function Brand() {
   return (
@@ -493,39 +515,44 @@ export function LandingPage() {
               </div>
 
               <div className="space-y-4">
-                {availableTests.map((test, index) => (
-                  <article
-                    key={test.key}
-                    className="grid gap-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_3px_12px_rgb(15_23_42/0.035)] sm:grid-cols-[72px_minmax(0,1fr)_auto] sm:items-center sm:p-6"
-                  >
-                    <div
-                      className={`grid size-[72px] place-items-center rounded-xl ${
-                        index === 0 ? "bg-blue-50 text-blue-700" : "bg-emerald-50 text-emerald-700"
-                      }`}
+                {availableTests.map((test, index) => {
+                  const copy = assessmentCopy[test.key];
+
+                  return (
+                    <article
+                      key={test.key}
+                      className="grid gap-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_3px_12px_rgb(15_23_42/0.035)] sm:grid-cols-[72px_minmax(0,1fr)_auto] sm:items-center sm:p-6"
                     >
-                      <span className="text-lg font-semibold tracking-[-0.05em]">
-                        {test.key === "mbti" ? "MBTI" : "BFI"}
-                      </span>
-                    </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="text-lg font-semibold tracking-[-0.025em] text-slate-900">{test.name}</h3>
-                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700">
-                          Available
+                      <div
+                        className={`grid size-[72px] place-items-center rounded-xl ${
+                          assessmentTones[index % assessmentTones.length]
+                        }`}
+                      >
+                        <span className="text-lg font-semibold tracking-[-0.05em]">
+                          {test.key.toUpperCase()}
                         </span>
                       </div>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">
-                        {test.key === "mbti"
-                          ? "A structured personality-type assessment with a clear type profile and detailed interpretation."
-                          : "A work-style profile across five dimensions using a plain-English 50-item assessment."}
-                      </p>
-                    </div>
-                    <div className="flex min-w-28 items-center gap-2 text-xs font-medium text-slate-500 sm:justify-end">
-                      <BrainCircuit aria-hidden="true" className="text-blue-500" size={15} />
-                      {assessmentLabels[test.key] ?? "Psychometric profile"}
-                    </div>
-                  </article>
-                ))}
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold tracking-[-0.025em] text-slate-900">{test.name}</h3>
+                          <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700">
+                            Available
+                          </span>
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                          {copy?.summary ?? test.description}
+                        </p>
+                      </div>
+                      <div className="flex min-w-28 flex-col gap-1 text-xs font-medium text-slate-500 sm:items-end">
+                        <span className="flex items-center gap-2">
+                          <BrainCircuit aria-hidden="true" className="text-blue-500" size={15} />
+                          {copy?.category ?? "Psychometric profile"}
+                        </span>
+                        <span>{test.estimatedMinutes} min estimated</span>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </div>
           </div>

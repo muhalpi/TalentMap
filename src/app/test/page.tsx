@@ -15,9 +15,38 @@ import {
   enforceTestTokenRateLimit,
   RateLimitExceededError,
 } from "@/services/test-rate-limit-service";
+import type { TestDefinition } from "@/tests/shared/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * What the consent overview should tell the participant they are about to do.
+ *
+ * A forced-choice instrument answers a whole group on one screen - DISC defines
+ * 56 questions but presents 28 group screens - so counting questions would promise
+ * twice the work, and calling those screens "questions" would misdescribe them as
+ * well: one screen is four words and takes two answers. Single-question
+ * instruments return no wording at all, which is what keeps the consent screen
+ * they render byte for byte what it has always been.
+ */
+function participantWorkload(definition: TestDefinition) {
+  const groups = definition.forcedChoiceGroups ?? [];
+
+  if (definition.presentation === "forced-choice-grid" && groups.length > 0) {
+    return {
+      questionCount: groups.length,
+      itemWording: {
+        statLabel: "Word groups",
+        plural: "word groups",
+        guidance:
+          "in each group pick the one word that is most like you and a different word that is least like you.",
+      },
+    };
+  }
+
+  return { questionCount: definition.questions.length };
+}
 
 function AccessUnavailableCard({
   title,
@@ -155,7 +184,7 @@ export default async function ParticipantTestPage({
           name: context.test.name,
           description: context.definition.description,
           estimatedMinutes: context.definition.estimatedMinutes,
-          questionCount: context.definition.questions.length,
+          ...participantWorkload(context.definition),
         }}
       />
     );
@@ -171,6 +200,12 @@ export default async function ParticipantTestPage({
         name: context.test.name,
         version: context.test.version,
         questions: context.definition.questions,
+        // Presentation payload. Defaults are resolved here so the runner never
+        // has to treat an absent field as "single-question": instruments that do
+        // not opt in get exactly the behaviour they have today.
+        presentation: context.definition.presentation ?? "single-question",
+        forcedChoiceGroups: context.definition.forcedChoiceGroups ?? [],
+        exclusiveWithinGroup: context.definition.exclusiveWithinGroup ?? false,
       }}
     />
   );

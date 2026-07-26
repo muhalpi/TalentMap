@@ -5,10 +5,11 @@ import type {
   TestKey,
 } from "./shared/types";
 import { bfiDefinition } from "./instruments/bfi/definition";
+import { discDefinition } from "./instruments/disc/definition";
 import { mbtiDefinition } from "./instruments/mbti/definition";
 
 function plannedInstrument(
-  key: Exclude<TestKey, "mbti" | "bfi">,
+  key: Exclude<TestKey, "mbti" | "bfi" | "disc">,
   name: string,
   estimatedMinutes: number,
 ): TestDefinition {
@@ -33,7 +34,7 @@ export const testRegistry: Record<TestKey, TestDefinition> = {
   bfi: bfiDefinition,
   sds: plannedInstrument("sds", "Self-Directed Search", 25),
   papi: plannedInstrument("papi", "PAPI", 25),
-  disc: plannedInstrument("disc", "DISC Assessment", 12),
+  disc: discDefinition,
 };
 
 export const testCatalog: TestCatalogItem[] = Object.values(testRegistry).map(

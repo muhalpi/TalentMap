@@ -1,6 +1,6 @@
 # TALENTMAP - CURRENT ARCHITECTURE BLUEPRINT
 
-Current as of July 16, 2026.
+Current as of July 26, 2026.
 
 TalentMap is a multi-tenant psychometric testing platform for internal
 provisioning, client-managed participant assessment, consent capture, scoring,
@@ -16,6 +16,12 @@ results, retention, and participant privacy operations.
   `src/tests/instruments/*` and expose the shared test definition/scoring
   contract.
 - Soft delete is not legal erasure. Participant erasure must anonymize PII.
+- A result is either a platform assessment or an XLSX import. `results.source`
+  records which, and a check constraint keeps `token_id` and `imported_at`
+  consistent with it.
+- Spreadsheet templates, parsing, and exports live in
+  `src/services/spreadsheet-workbook.ts`. Import validation reports issues per
+  sheet, row, and column instead of failing on the first bad cell.
 
 ## Access Model
 
@@ -50,17 +56,40 @@ Authorization intent:
 - Client users operate only within their own tenant boundary.
 - Public users cannot browse, register, or create accounts in the platform.
 
+Current login implementation:
+
+- `/login` is still a first-pass role chooser. It posts a role to
+  `/api/session/login`, and `src/auth/login-service.ts` resolves the first
+  seeded internal admin or the seeded demo client without verifying any
+  credential.
+- The signed `tm_session` cookie is re-resolved against `internal_admin_users`
+  or `client_users` on every protected request, so role separation and tenant
+  scoping hold once a session exists.
+- Credential verification is the outstanding gap before external client access.
+  See "Remaining Technical Notes".
+
 ## Current Stack
 
 - Framework: Next.js App Router.
 - ORM: Drizzle ORM.
 - Database: PostgreSQL/Neon.
+- Validation: Zod at every route handler and server-action boundary.
+- Spreadsheets: ExcelJS for participant/result templates, imports, and exports.
+- Tests: the Node test runner through `tsx --test`, enumerated in the
+  `test` script in `package.json`.
 - Test data shape: raw answers and scored result JSON are stored as JSONB so
   each instrument can keep its native scoring structure.
-- Visual direction: warm, document-like Notion-inspired UI with restrained
-  chrome, compact operational screens, and blue as the primary action color.
+- Visual direction: deep navy navigation shell on a cool gray canvas, compact
+  white data surfaces, and blue as the primary action color.
+  `TALENTMAP_DESIGN.md` is the authoritative design system and global tokens
+  live in `src/app/globals.css`.
 
 ## Implemented App Surfaces
+
+Public:
+
+- `/` marketing landing page. This is the only marketing surface.
+- `/login` session entry.
 
 Admin:
 
@@ -68,16 +97,19 @@ Admin:
 - `/admin/clients` client list.
 - `/admin/clients/new` client creation.
 - `/admin/clients/[clientId]` contract, entitlements, tokens, and results.
+- `/admin/clients/[clientId]/results/[resultId]` admin result detail.
 - `/admin/instruments` instrument catalog.
 - `/admin/retention` retention overview and manual sweep trigger.
 
 Client dashboard:
 
-- `/dashboard` client workspace overview.
-- `/dashboard/tokens` assessment access creation, rotation, and lifecycle.
-- `/dashboard/results` result list.
-- `/dashboard/results/[resultId]` result detail.
-- `/dashboard/participants` participant directory.
+- `/dashboard` client workspace overview and analytics.
+- `/dashboard/tokens` assessment access creation, rotation, cancellation, and
+  lifecycle.
+- `/dashboard/results` result list, XLSX result import, and XLSX export.
+- `/dashboard/results/[resultId]` result detail and single-result export.
+- `/dashboard/participants` participant directory, profile creation, XLSX
+  participant import, and tenant field definition management.
 - `/dashboard/participants/[participantId]` participant detail, history, edit,
   and anonymization action.
 
@@ -94,24 +126,52 @@ Participant flow:
 
 Internal APIs and jobs:
 
+Session:
+
 - `/api/session/login`
 - `/api/session/logout`
-- `/api/test/access`
+
+Participant assessment:
+
+- `/api/test/access` exchanges an access code for a session (`POST`) and clears
+  it (`DELETE`).
 - `/api/test/consent`
 - `/api/test/start`
 - `/api/test/draft`
 - `/api/test/submit`
-- `/api/dashboard/demo/tokens`
-- `/api/dashboard/results/export`
+
+Client dashboard:
+
+- `/api/dashboard/tokens` creates participant assessment access.
+- `/api/dashboard/demo/tokens` compatibility alias for the route above.
 - `/api/dashboard/tokens/[tokenId]/reissue`
+- `/api/dashboard/tokens/[tokenId]/cancel`
+- `/api/dashboard/results/export`
+- `/api/dashboard/import/participants`
+- `/api/dashboard/import/results`
+- `/api/dashboard/import/templates/participants`
+- `/api/dashboard/import/templates/results`
+
+Admin:
+
+- `/api/admin/clients/[clientId]/results/export`
+- `/api/admin/clients/[clientId]/tokens/[tokenId]/reissue`
+- `/api/admin/clients/[clientId]/tokens/[tokenId]/cancel`
+
+Jobs:
+
 - `/api/internal/quota-reservations/run`
 - `/api/internal/retention/run`
 
+There is no `middleware.ts`. Every handler resolves its own session through
+`getClientSession`, `getInternalAdminSession`, or the participant assessment
+session, and tenant data responses set `Cache-Control: no-store`.
+
 ## UI State Model
 
-The UI is an operational console, not a marketing surface. Screens should be
-dense enough for repeated admin/client work while staying readable on the warm
-Notion-style canvas.
+The authenticated UI is an operational console. Screens should be dense enough
+for repeated admin/client work while staying readable on the cool gray canvas
+defined in `TALENTMAP_DESIGN.md`.
 
 Global shell:
 
@@ -166,12 +226,26 @@ Admin UI states:
 
 Client dashboard UI states:
 
-- Access tables show assessment lifecycle: `active`, `in_progress`, `completed`, and
-  `expired`.
+- The overview renders live tenant analytics: quota and assessment counts, a
+  dated issued/completed/in-progress/expired trend, per-instrument completion
+  rates, result distribution, recent activity, next token expiry, and
+  consent/retention compliance.
+- Access tables show assessment lifecycle: `active`, `in_progress`,
+  `completed`, and `expired`, plus rotate and cancel actions on live rows.
 - Result tables show participant identity where allowed, result label,
-  submitted date, "Retain Until", retention status, and view/export actions.
+  submitted date, "Retain Until", retention status, source, and view/export
+  actions.
+- Result rows are badged `platform_assessment` or `xlsx_import` so imported
+  history is never presented as a platform-administered sitting.
 - Participant pages show profile data, token/result history, edit state, and
   anonymization controls.
+- The participant directory exposes search, status filter, activity filter, and
+  sort, and its empty state distinguishes "no profiles yet" from "no matches for
+  the current filters".
+- Tenant participant field definitions are managed inline, including archived
+  definitions.
+- Spreadsheet import panels have `idle`, `uploading`, `success`, and `error`
+  states and render the per-sheet/row/column issue list on rejection.
 - Anonymized participants must not appear as normal profiles.
 
 Participant test UI states:
@@ -187,6 +261,59 @@ Participant test UI states:
 - Completed demo submissions can render client-side results without persistence;
   real submissions persist results and lock the assignment.
 
+The runner has two presentations, chosen by the instrument's `presentation`
+field. Presentation is a UI concern only: neither one changes which questions
+exist, how many an instrument defines, or how an answer is stored.
+
+- `single-question` is the default and covers every instrument that does not opt
+  in. One question per screen, and a selection advances the screen on its own.
+- `forced-choice-grid` presents one group per screen as a four-row table with a
+  Term column, a Most column, and a Least column. A 28-group instrument is 28
+  screens standing on 56 questions, and each screen writes two ordinary answers
+  keyed by the two question ids the group names.
+
+Forced-choice group screen states:
+
+- A group is `empty`, `partial`, or `complete`. `partial` is its own state
+  because a group with one column filled is not finished; the group map marks it
+  with a dashed border, a corner dot, and its state in the cell's accessible
+  name, and progress counts only complete groups.
+- The screen advances by itself only when a POINTER commit completes a group.
+  The arrow keys check a native radio as focus moves onto it, so a keyboard
+  commit never advances; the participant moves on with Previous and Next, which
+  are always available.
+- An automatic advance moves focus into the new group's Most column, and each
+  screen change is announced through a polite live region, because Previous and
+  Next change the whole screen without moving focus.
+- The consent overview counts group screens rather than questions and names them
+  as word groups, so it does not promise twice the work.
+
+A word cannot be both Most and Least in the same group, for an instrument that
+declares `exclusiveWithinGroup`. The rule has one implementation, in
+`src/tests/shared/forced-choice.ts`, and is enforced at all four points where an
+answer can enter the system:
+
+- The grid UI enforces it structurally. Choosing a word in one column disables
+  that word's cell in the other, so the invalid state cannot be produced;
+  changing the first choice re-enables the cell it had blocked, and a selection
+  the participant made is never silently cleared.
+- `PUT /api/test/draft` rejects a group whose two sides are equal. A partial
+  group is still legitimate, so only an equal pair is refused. The check runs
+  ahead of the demo short-circuit, so a demo run behaves like a real one.
+- `POST /api/test/submit` rejects an equal pair before scoring, and names the
+  groups to reopen rather than reporting a generic scoring failure.
+- XLSX result import reports an equal pair as a per-cell issue naming the sheet,
+  the row, and the offending column, alongside the other per-cell answer checks.
+- Scoring deliberately still tolerates an equal pair: it nets that group to zero
+  and counts it in `summary.ambiguousGroups`, so a result stored before these
+  gates existed still renders instead of crashing a report. Because all four
+  entry points now refuse it, `ambiguousGroups` is 0 for any newly captured
+  result, and a non-zero count marks historical or imported data.
+- A stored answer map that already carries an equal pair (legacy or imported) is
+  reported rather than repaired: the participant is told which groups to reopen
+  and decides which of the two answers changes. Autosave pauses while such a map
+  would be rejected, and the on-screen notice says so.
+
 Retention UI states:
 
 - `active` results are visible and exportable until their retain-until date.
@@ -196,6 +323,11 @@ Retention UI states:
   client views/exports.
 
 ## Current Database Model
+
+`internal_admin_users`
+
+- Internal, company-side admin accounts with a unique email and an
+  `admin`/`owner` role. Seeded, never self-registered.
 
 `clients`
 
@@ -210,29 +342,8 @@ Retention UI states:
 `tests`
 
 - Per-client unlocked test definitions and versions.
-
-## Instrument Registry
-
-The source of truth for available and planned assessments is
-`src/tests/registry.ts`.
-
-Current instrument states:
-
-- `mbti` - MBTI Personality Type. Adapted and implemented.
-- `kts2` - KTS-II Questionnaire. Reserved, pending adaptation.
-- `mmpi` - MMPI. Reserved, pending adaptation.
-- `bfi` - Big Five Work Style Profile (IPIP-BFM-50). Adapted and implemented.
-- `sds` - Self-Directed Search. Reserved, pending adaptation.
-- `papi` - PAPI. Reserved, pending adaptation.
-- `disc` - DISC Assessment. Reserved, pending adaptation.
-
-Rules:
-
-- Admin provisioning should only enable instruments marked as implemented.
-- Pending instruments may appear in the admin registry as roadmap/reserved
-  items, but participant tokens should not be generated for them.
-- New instruments should be added through the registry and implement the shared
-  `TestDefinition` contract before being exposed to clients.
+- A tenant may retain an older version row. Delivery and import queries select
+  the row matching the current implemented scoring version.
 
 `client_test_quotas`
 
@@ -284,7 +395,9 @@ Rules:
 
 `participant_answer_drafts`
 
-- Stores in-progress answers as JSONB by token.
+- Stores in-progress answers as JSONB by token, one row per token.
+- Also stores per-question timings and the participant's current question index
+  so a resumed session returns to the same place.
 - Used for participant resume.
 - Cleared after successful submission and deleted during participant
   anonymization.
@@ -292,8 +405,14 @@ Rules:
 `results`
 
 - Stores submitted answers, structured score output, score summary,
-  interpretation, submission time, retention deadline, and retention status.
-- `participant_id` is set from the token at submission time where available.
+  interpretation, per-question timings, total duration, submission time,
+  retention deadline, and retention status.
+- `source` is `platform_assessment` or `xlsx_import`.
+- `token_id` is unique. A check constraint requires it for platform assessments
+  and forbids it for imports, which must instead carry `imported_at` alongside
+  `imported_by_client_user_id` and `imported_file_name`.
+- `participant_id` is set from the token at submission time where available, and
+  from the workbook row for imports.
 - Client-facing result list/detail/export queries exclude
   `retention_status = deleted`.
 
@@ -305,6 +424,111 @@ Rules:
 `test_rate_limit_buckets`
 
 - Stores hashed token/IP rate-limit buckets for participant test routes.
+
+## Instrument Registry
+
+The source of truth for available and planned assessments is
+`src/tests/registry.ts`.
+
+Current instrument states:
+
+- `mbti` - MBTI Personality Type. Adapted and implemented.
+- `kts2` - KTS-II Questionnaire. Reserved, pending adaptation.
+- `mmpi` - MMPI. Reserved, pending adaptation.
+- `bfi` - Big Five Work Style Profile (IPIP-BFM-50). Adapted and implemented.
+- `sds` - Self-Directed Search. Reserved, pending adaptation.
+- `papi` - PAPI. Reserved, pending adaptation.
+- `disc` - DISC Work Behaviour Profile. Adapted and implemented.
+
+Rules:
+
+- Admin provisioning should only enable instruments marked as implemented.
+- Pending instruments may appear in the admin registry as roadmap/reserved
+  items, but participant tokens should not be generated for them.
+- Reserved instruments carry no questions and their `score` throws, so they must
+  never be exposed for client delivery or spreadsheet import.
+- New instruments should be added through the registry and implement the shared
+  `TestDefinition` contract before being exposed to clients.
+
+### DISC Adaptation Notes
+
+The DISC item bank and its norming data cannot be re-derived from the module
+code. This is the provenance a maintainer needs before editing anything under
+`src/tests/instruments/disc`.
+
+- The 112-adjective bank, its group membership, its within-group display order,
+  and its D/I/S/C keying come from the licensed 28-group forced-choice
+  instrument supplied by the platform operator. All of it was transcribed from
+  the operator's running app plus the companion SQL keying, not authored here.
+- 13 of the 112 adjectives score on one side only, Most or Least, never both.
+  The Most and Least tallies therefore do not sum to a fixed total, and the
+  change scores do not sum to zero. That asymmetry is source norming, not a
+  transcription defect, and must not be "corrected".
+- The reachable maxima are Most `D 27 / I 26 / S 24 / C 28` and Least
+  `D 27 / I 27 / S 26 / C 26`. The unit tests assert those figures against the
+  bank itself, so they are the guard that catches a mis-keyed adjective.
+- The quantity the instrument norms is an INTENSITY from 1 to 28, not a segment.
+  Each of the 12 conversion tables - one per graph and dimension - maps a raw
+  score to an intensity, and the segment is that intensity in bands of four:
+  `segment = ceil(intensity / 4)`, so segment 1 is intensity 1-4, segment 2 is
+  5-8, and so on to segment 7 for 25-28. That relation held for all 202 rows of
+  the source `results` table with no exception, which is why the module stores
+  the intensity tables and derives the segment rather than storing both.
+  Consequence: two dimensions in the same segment sit at DIFFERENT heights on a
+  graph, so a graph cannot be drawn from segments alone. The Private graph's
+  conversion is inverted, a low Least tally giving a HIGH intensity, and the
+  per-dimension midlines are asymmetric about zero. Symmetric or shared bands
+  must never be substituted for these tables.
+- The source `pattern_map` was verified synthetic: its pattern is the Dominance
+  segment, plus 7 whenever the Influence segment is odd, with Steadiness and
+  Conscientiousness absent from the formula entirely. It maps both `6-4-2-4` and
+  `6-6-2-4` to the same pattern, so it cannot reproduce the operator's own
+  report, and it is deliberately not used. The 17 patterns are derived from the
+  perceived graph instead, and their interpretive text is original because the
+  source pattern table carried only placeholders (`name1`..`name14`).
+- The DiSC Classic "classical pattern" names - "Result-oriented",
+  "Inspirational", and the rest - come from a licensed table this codebase does
+  not hold. They are never guessed at, never reconstructed, and never printed.
+  Every surface that shows a pattern name shows TalentMap's own derivation and
+  says so in the same breath: the report field list, the figure's pattern strip,
+  the panel beside each graph, the figure's accessible description, and the XLSX
+  Analysis sheet all carry that attribution. Nothing may imply otherwise.
+
+### DISC Result Presentation
+
+`src/components/results/disc-profile-report.tsx` is the one report body, shared
+by the participant result screen (`disc-participant-result.tsx`) and the
+dashboard result page (`disc-result-report.tsx`), the same arrangement BFI uses.
+`disc-graph.tsx` holds the figure and the segment readout.
+
+- Three graphs, one per reading, behind an ARIA tablist that opens on Graph III:
+  Graph III Change (from the change scores, and the graph the pattern is derived
+  from), Graph I Most, Graph II Least. All three panels are in the DOM; the two
+  that are not shown are hidden on screen and revealed for print, so a printed or
+  exported report is complete.
+- A point's vertical position is its INTENSITY on the 1-28 scale, 1 at the
+  bottom. The segment is only printed. Plotting from the segment would collapse
+  two dimensions that share one onto the same line, which the operator's own
+  report does not do.
+- The report field list follows the printed report: Segment, Pattern, Emotions,
+  Goal, Judges others by, Influences others by, Value to the organization,
+  Overuses, Under pressure, Fears, Would increase effectiveness through,
+  Description. The nine narrative fields are authored per pattern and are copied
+  onto `result.patternDetail` by `scoreDiscAnswers`, so both surfaces print all
+  twelve from the payload alone.
+- BUNDLE PURITY, and why the narrative is stored rather than looked up. The
+  participant result screen is reachable from `participant-test-runner.tsx`, a
+  client entry, so every value import it can reach is compiled into the
+  participant's JavaScript. A DISC instrument module would take the item bank
+  with it, and that bank is the answer key. Every component under
+  `src/components/results` and `src/components/test` therefore imports the
+  instrument for TYPES ONLY;
+  `src/components/test/participant-client-graph.test.ts` walks that import graph
+  and fails on any value import other than the score type guards.
+- Nothing on these surfaces is conveyed by colour alone, every number drawn in
+  the SVG is repeated in the figure's accessible description and again in the
+  dimension table, and both horizontal scroll containers are focusable and named
+  so the right-hand half of the chart is reachable by keyboard at phone width.
 
 ## Core Workflows
 
@@ -352,8 +576,65 @@ Participant flow:
   retention, access, and deletion contact.
 - Draft answers are saved as JSONB and can be loaded when the participant
   resumes.
+- `PUT /api/test/draft` replaces the whole stored answer map, so autosave is held
+  shut until the load on mount has SUCCEEDED. A load that is still in flight
+  defers its first save and then sends the merged map; a load that FAILED leaves
+  autosave shut for the rest of the session and tells the participant so, because
+  writing a map this session never read would replace a stored draft with only
+  what it happens to hold. `canPersistDraft` in
+  `src/components/test/draft-resume.ts` owns that decision.
+- Answers chosen before the stored draft arrives are merged with it rather than
+  replaced by it: the first screen is interactive from mount, so answering before
+  the response lands is ordinary.
 - Submission scores server-side, creates a result, marks the token completed,
   converts one reserved quota into consumed quota, and clears the draft.
+
+### Spreadsheet Import And Export
+
+Client users can move participant and result data through XLSX workbooks.
+
+Upload rules:
+
+- Uploads must be `.xlsx`, non-empty, and 10 MB or smaller.
+- Participant imports are capped at 1,000 rows; result imports at 500 rows.
+- Validation collects every issue with sheet, row, and column context and
+  rejects the whole workbook rather than importing part of it.
+
+Participant imports:
+
+- Templates are generated from the tenant's active field definitions.
+- Rows receive the same type, required-field, and choice-option validation as
+  the UI, plus in-workbook and per-client duplicate checks for email, employee
+  identifier, and external reference.
+
+Result imports:
+
+- Templates are generated per instrument and may be scoped to one participant.
+- Raw answers are scored by the platform; the workbook never supplies scores.
+- A row requires an active tenant contract, an active participant in the tenant,
+  an enabled entitlement on the current implemented scoring version, an
+  unexpired entitlement, and available quota for the whole batch.
+- For an instrument that declares `exclusiveWithinGroup`, a row whose two sides
+  of a group answer the same option is invalid data, reported as a per-cell issue
+  against the Least cell and naming the Most cell to change.
+- Imported results are stored with `source = xlsx_import`, no token, an
+  `imported_at` timestamp, and the importing client user and file name. They
+  consume quota like platform sittings and follow the same retention deadline.
+- The import is all-or-nothing: if quota or insertion cannot cover every
+  prepared row, the whole statement fails and nothing is stored.
+
+Exports:
+
+- Result exports build a workbook separating summary, dimensions, analysis, and
+  raw answers, for either the tenant result list or a single result.
+- Admin exports use the same builder scoped to one client.
+- Dimension Scores is shared by every instrument and an operator's saved formula
+  or query points at a column LETTER, so a new column is APPENDED, never inserted
+  among the existing ones. `spreadsheet-workbook.test.ts` pins the position of
+  the thirteen columns that predate DISC.
+- A DISC export carries the three intensities per dimension alongside the three
+  segments. Without them the export cannot reproduce a graph, because the graph
+  plots the intensity.
 
 ## Current Retention Policy
 
@@ -442,7 +723,28 @@ Operational endpoint:
 - Exports exclude `retention_status = deleted`.
 - Participant PII is not shown for anonymized participants.
 - Result rows show participant identity when available, test, result label,
-  submitted date, retain-until date, retention status, and actions.
+  submitted date, retain-until date, retention status, source, and actions.
+- Imported and platform-administered results must remain distinguishable in
+  every list, detail view, and export.
+
+## Migration Notes
+
+Post-retention migrations, in addition to the retention realignment above:
+
+- `drizzle/0007_flawless_tenebrous.sql` adds per-question timings to drafts and
+  results, plus `results.duration_seconds`.
+- `drizzle/0008_living_gertrude_yorkes.sql` adds `participant_tokens.test_key`
+  and `access_version`, retires already-expired and duplicate live assignments
+  while releasing their reserved quota, then creates the partial unique index
+  that allows only one live assignment per client, participant, and test type.
+- `drizzle/0009_curved_reavers.sql` introduces `result_source`, makes
+  `results.token_id` nullable, adds the import columns and the
+  `results_source_integrity` constraint, and converts previously
+  placeholder-token imports into real `xlsx_import` rows.
+- `drizzle/0010_fat_quentin_quire.sql` creates
+  `participant_field_definitions`, derives definitions for the legacy
+  role/department/location metadata keys, and moves those values into
+  `metadata.customFields`.
 
 ## Security Rules
 
@@ -459,7 +761,23 @@ Operational endpoint:
 
 ## Remaining Technical Notes
 
+- Login does not verify credentials yet. `/login` posts a role and
+  `src/auth/login-service.ts` returns a session for the first seeded internal
+  admin or the seeded demo client, so anyone who can reach `/login` can mint an
+  admin session. Real credential verification must land before external client
+  access. Every other access control assumes this is closed.
 - The current production retention model is contract end date plus grace period,
   not submission date plus a configurable day count.
 - PostgreSQL RLS policy scaffolding exists in `src/db/rls-policies.sql`; app
   code currently enforces tenant isolation in the service layer.
+- `demo-mbti`, `demo-bfi`, and `demo-disc` are recognized as demo access codes.
+  They run a full assessment and render a client-side result without creating a
+  participant, consent, quota, or result row. The codes are derived from the map
+  in `src/lib/demo-test-token.ts`, so an instrument without an entry there has
+  no demo path.
+- `client_test_quotas.quota_used` is a derived mirror of
+  `quota_reserved + quota_consumed`. Every quota mutation must keep it in sync.
+- The retention sweep and quota reservation cleanup are platform-wide internal
+  jobs and are intentionally not scoped to a single `client_id`.
+- `docs/architecture.md` is the short-form summary of this document. Keep the
+  two in sync when the tenancy or instrument contract changes.

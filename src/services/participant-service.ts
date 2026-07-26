@@ -19,6 +19,11 @@ import {
 } from "@/lib/demo-test-token";
 import { RETENTION_DELETE_GRACE_DAYS } from "@/lib/retention-policy";
 import { getTestDefinition } from "@/tests/registry";
+import {
+  forcedChoiceConflictGroupList,
+  forcedChoiceGroupConflicts,
+  type ForcedChoiceGroupConflict,
+} from "@/tests/shared/forced-choice";
 import type { AnswerMap, ScoreOutput, TestDefinition } from "@/tests/shared/types";
 
 type TokenStatus = "active" | "in_progress" | "completed" | "expired";
@@ -333,12 +338,75 @@ function normalizeDraftAnswers(
   return normalized;
 }
 
+/**
+ * Clamps the stored resume position into the definition's question array.
+ *
+ * The value is always a 0-based index into `definition.questions`, for every
+ * instrument and every presentation. A forced-choice instrument shows one group
+ * per screen rather than one question per screen, and the runner stores that
+ * screen as the group's MOST question index - group N is index 2 * (N - 1) - so
+ * the field keeps exactly one meaning and a resumed grid still lands on the
+ * group the participant left. Nothing here needs to know which presentation is
+ * in play, and the bound must stay the question count rather than a screen
+ * count, or a grid resume would be clamped to the first half of the instrument.
+ */
 function normalizeQuestionIndex(
   context: ParticipantTestContext,
   currentQuestionIndex: number,
 ) {
   const maxIndex = Math.max(context.definition.questions.length - 1, 0);
   return Math.min(Math.max(Math.trunc(currentQuestionIndex), 0), maxIndex);
+}
+
+/**
+ * The forced-choice groups where the same option is answered on both sides.
+ *
+ * Driven entirely off the definition: an instrument opts in with
+ * `exclusiveWithinGroup` and describes its own screens with
+ * `forcedChoiceGroups`, so this service never names an instrument and an
+ * instrument that declares neither is untouched. What counts as a conflict comes
+ * from `@/tests/shared/forced-choice`, the single implementation the grid UI and
+ * result import also call, so no two enforcement points can drift apart on it.
+ *
+ * A group with only one side answered is never a conflict: drafts are
+ * legitimately partial and a half-filled group is a normal intermediate state.
+ */
+function exclusiveGroupConflicts(
+  definition: TestDefinition,
+  answers: Record<string, string | undefined>,
+): ForcedChoiceGroupConflict[] {
+  if (!definition.exclusiveWithinGroup) {
+    return [];
+  }
+
+  return forcedChoiceGroupConflicts(
+    definition.forcedChoiceGroups ?? [],
+    answers,
+  );
+}
+
+/**
+ * Rejects an answer set that marks the same word both Most and Least.
+ *
+ * Exported so the rule can be exercised directly and reused by any other write
+ * path. The message names the groups to reopen, because it is shown to the
+ * participant and "invalid answers" tells them nothing they can act on.
+ */
+export function assertExclusiveWithinGroup(
+  definition: TestDefinition,
+  answers: Record<string, string | undefined>,
+) {
+  const conflicts = exclusiveGroupConflicts(definition, answers);
+
+  if (conflicts.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `${forcedChoiceConflictGroupList(
+      conflicts.map((conflict) => conflict.group),
+    )} cannot use the same word for Most and Least.`,
+  );
 }
 
 function normalizeQuestionTimings(
@@ -574,6 +642,18 @@ export async function saveParticipantAnswerDraft(
     throw new Error("Assessment access is invalid or unavailable.");
   }
 
+  // A draft is allowed to be partial, but never to hold a group whose two sides
+  // carry the same word: that state is invalid at every other boundary, and
+  // autosaving it would resume the participant straight back into it. Reading a
+  // draft deliberately does not run this check, so an already-stored draft still
+  // loads and can be corrected rather than locking the participant out.
+  //
+  // Ahead of the demo short-circuit on purpose. A demo access persists nothing,
+  // but it is how the grid is exercised without a real assignment, and submit
+  // validates a demo run too; a demo draft that answered 200 to a request every
+  // other path refuses would make the demo useless for catching exactly that.
+  assertExclusiveWithinGroup(context.definition, input.answers);
+
   if (context.demo) {
     return null;
   }
@@ -691,6 +771,13 @@ export async function submitParticipantResult(
   if (context.token.status === "completed") {
     throw new Error("This assessment has already been completed.");
   }
+
+  // Checked before scoring, and before the demo short-circuit further down, so
+  // the participant gets the group they need to reopen instead of a generic
+  // scoring error. Scoring itself keeps tolerating an equal pair on purpose - a
+  // legacy stored result must still render - which is exactly why submit has to
+  // be the one to refuse it.
+  assertExclusiveWithinGroup(context.definition, answers);
 
   const score = context.definition.score(answers);
   const normalizedQuestionTimings = normalizeQuestionTimings(

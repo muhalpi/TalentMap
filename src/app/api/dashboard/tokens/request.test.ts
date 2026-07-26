@@ -24,6 +24,16 @@ test("continues to accept MBTI access requests", () => {
   assert.equal(parsed.testKey, "mbti");
 });
 
+test("accepts DISC access requests", () => {
+  const parsed = dashboardTokenRequestSchema.parse({
+    testKey: "disc",
+    participantId,
+  });
+
+  assert.equal(parsed.testKey, "disc");
+  assert.equal(parsed.participantId, participantId);
+});
+
 test("requires a registered participant identity", () => {
   assert.throws(
     () => dashboardTokenRequestSchema.parse({ testKey: "bfi" }),

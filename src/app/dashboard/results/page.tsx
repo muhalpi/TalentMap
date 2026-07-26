@@ -8,6 +8,7 @@ import {
   getClientDashboardByClientId,
   getClientResults,
 } from "@/services/dashboard-service";
+import { resultImportTestLabelList } from "@/services/result-import-tests";
 
 export default async function DashboardResultsPage() {
   const session = await requireClientSession();
@@ -47,7 +48,7 @@ export default async function DashboardResultsPage() {
       <section className="mt-6 grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)] xl:items-start">
         <SpreadsheetImportPanel
           title="Import Test Results"
-          description="Upload raw BFI or MBTI responses in bulk by participant ID. TalentMap calculates the result and analysis."
+          description={`Upload raw ${resultImportTestLabelList()} responses in bulk by participant ID. TalentMap calculates the result and analysis.`}
           endpoint="/api/dashboard/import/results"
           templateLinks={[
             {

@@ -6,6 +6,7 @@ import {
   participantSessionCookieOptions,
   type ParticipantSessionAccess,
 } from "@/auth/participant-session";
+import { isDemoTestKey } from "@/lib/demo-test-token";
 import { getParticipantTestContext } from "@/services/participant-service";
 import {
   enforceInvalidTokenRateLimit,
@@ -45,11 +46,20 @@ export async function GET(
     });
 
     const participantContext = await getParticipantTestContext(token);
+    // Demo contexts are only built from the demo token map, so this narrowing
+    // always succeeds today. Deriving the key instead of casting means a future
+    // instrument that gains a demo context without a demo token entry is
+    // treated as an invalid token rather than stored under a key the session
+    // decoder will reject on the next request.
+    const demoKey =
+      participantContext?.demo && isDemoTestKey(participantContext.test.key)
+        ? participantContext.test.key
+        : null;
     const participantAvailable = Boolean(
       participantContext &&
         (participantContext.token.status === "active" ||
           participantContext.token.status === "in_progress") &&
-        (participantContext.demo ||
+        (demoKey !== null ||
           (participantContext.participant?.status === "active" &&
             !participantContext.participant.deletedAt)),
     );
@@ -62,10 +72,10 @@ export async function GET(
       return redirectToEntry(request, "invalid");
     }
 
-    const access: ParticipantSessionAccess = participantContext.demo
+    const access: ParticipantSessionAccess = demoKey
       ? {
           kind: "demo",
-          demoKey: participantContext.test.key as "mbti" | "bfi",
+          demoKey,
         }
       : {
           kind: "assignment",

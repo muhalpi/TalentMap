@@ -8,12 +8,37 @@ import {
   type ParticipantCustomFieldValue,
   type ParticipantFieldDefinitionDto,
 } from "@/services/participant-field-service";
+import {
+  resultImportTestKeys,
+  resultSheetConfig,
+  type ResultImportTestKey,
+} from "@/services/result-import-tests";
 import { getTestDefinition } from "@/tests/registry";
-import type { AnswerMap } from "@/tests/shared/types";
+import { discPatternProfiles } from "@/tests/instruments/disc/profiles";
+import type {
+  DiscDimensionCode,
+  DiscPatternKey,
+  DiscPatternNarrative,
+  DiscPatternProfile,
+} from "@/tests/instruments/disc/types";
+import { forcedChoiceGroupConflicts } from "@/tests/shared/forced-choice";
+import type { AnswerMap, TestDefinition } from "@/tests/shared/types";
 
 export const MAX_SPREADSHEET_BYTES = 10 * 1024 * 1024;
 export const MAX_PARTICIPANT_IMPORT_ROWS = 1_000;
 export const MAX_RESULT_IMPORT_ROWS = 500;
+
+// The importable-instrument list and its per-instrument copy live in
+// result-import-tests so that UI surfaces can read them without importing this
+// module and ExcelJS. Re-exported here because the route, the import service and
+// the tests have always reached for them through this module.
+export {
+  resultImportTestKeys,
+  resultImportTestLabel,
+  resultImportTestLabelList,
+  resultSheetName,
+  type ResultImportTestKey,
+} from "@/services/result-import-tests";
 
 export interface SpreadsheetIssue {
   sheet: string;
@@ -36,7 +61,7 @@ export interface ResultImportRow {
   sheet: string;
   rowNumber: number;
   participantId: string;
-  testKey: "bfi" | "mbti";
+  testKey: ResultImportTestKey;
   submittedAt: Date;
   durationSeconds: number;
   answers: AnswerMap;
@@ -91,15 +116,6 @@ function participantColumns(definitions: ParticipantFieldDefinitionDto[]) {
       })),
   ];
 }
-
-const resultSheetConfig = {
-  bfi: {
-    sheetName: "BFI Results",
-    label: "Big Five",
-    answerHint: "1, 2, 3, 4, or 5",
-  },
-  mbti: { sheetName: "MBTI Results", label: "MBTI", answerHint: "A or B" },
-} as const;
 
 function createWorkbook() {
   const workbook = new ExcelJS.Workbook();
@@ -230,7 +246,19 @@ function addInstructionsSheet(
         wrapText: true,
         vertical: "top",
       };
-      sheet.getRow(rowNumber).height = 32;
+      // Sized from the text, not fixed.
+      //
+      // A fixed 32 shows about two wrapped lines at this column's width, which
+      // was enough until DISC's answer-format note - 420 characters, five
+      // wrapped lines, and the only place any template states that a word may not
+      // be both MOST and LEAST. Breaking that rule makes the import reject the
+      // whole workbook, so it is exactly the sentence that must not be cut off.
+      // The floor stays at 32 so every row that already fitted keeps the height
+      // it had, and only rows that need more get more.
+      sheet.getRow(rowNumber).height = Math.max(
+        32,
+        wrappedRowHeight(wrappedLineCount(detail, 88), 160),
+      );
       rowNumber += 1;
     }
 
@@ -395,9 +423,43 @@ function questionColumn(questionNumber: number) {
   return `q${String(questionNumber).padStart(2, "0")}`;
 }
 
+/**
+ * Approximate number of display lines a wrapped cell needs. Used to size rows
+ * from their own content instead of from the instrument, so a 56-question bank
+ * of short prompts is neither padded out nor clipped.
+ */
+function wrappedLineCount(text: string, charactersPerLine: number) {
+  return text
+    .split("\n")
+    .reduce(
+      (total, line) =>
+        total + Math.max(1, Math.ceil(line.length / charactersPerLine)),
+      0,
+    );
+}
+
+function wrappedRowHeight(lines: number, maximum: number) {
+  return Math.min(Math.max(28, lines * 15 + 8), maximum);
+}
+
+/**
+ * Distinct answer values a definition accepts, for Excel list validation. Set
+ * insertion keeps the instrument's own option order, so the dropdown reads the
+ * way the questionnaire does.
+ */
+function answerOptionValues(definition: TestDefinition) {
+  return [
+    ...new Set(
+      definition.questions.flatMap((question) =>
+        question.options.map((option) => option.value),
+      ),
+    ),
+  ];
+}
+
 function addQuestionGuide(
   workbook: ExcelJS.Workbook,
-  testKeys: Array<"bfi" | "mbti">,
+  testKeys: readonly ResultImportTestKey[],
 ) {
   const sheet = workbook.addWorksheet("Question Guide");
   sheet.columns = [
@@ -409,14 +471,22 @@ function addQuestionGuide(
   for (const testKey of testKeys) {
     const definition = getTestDefinition(testKey);
     for (const question of definition.questions) {
-      sheet.addRow({
+      const allowedValues = question.options
+        .map((option) => `${option.value} = ${option.label}`)
+        .join("; ");
+      const guideRow = sheet.addRow({
         testKey: testKey.toUpperCase(),
         column: questionColumn(question.no),
         question: question.prompt,
-        allowedValues: question.options
-          .map((option) => `${option.value} = ${option.label}`)
-          .join("; "),
+        allowedValues,
       });
+      guideRow.height = wrappedRowHeight(
+        Math.max(
+          wrappedLineCount(question.prompt, 68),
+          wrappedLineCount(allowedValues, 56),
+        ),
+        120,
+      );
     }
   }
   styleDataSheet(sheet, 4);
@@ -425,15 +495,11 @@ function addQuestionGuide(
     wrapText: true,
     vertical: "top",
   };
-  for (let rowNumber = 2; rowNumber <= sheet.rowCount; rowNumber += 1) {
-    sheet.getRow(rowNumber).height =
-      sheet.getCell(rowNumber, 1).value === "BFI" ? 52 : 42;
-  }
 }
 
 function addResultInputSheet(
   workbook: ExcelJS.Workbook,
-  testKey: "bfi" | "mbti",
+  testKey: ResultImportTestKey,
   participantId?: string,
 ) {
   const config = resultSheetConfig[testKey];
@@ -481,10 +547,17 @@ function addResultInputSheet(
   sheet.getCell("B2").note =
     "Optional. Use an Excel date/time or ISO date. Blank uses the upload time.";
   sheet.getCell("C2").note = "Optional whole seconds. Blank uses 0.";
-  for (let index = 0; index < definition.questions.length; index += 1) {
+  // The dropdown comes from the definition's own option values, so an
+  // instrument with a different answer alphabet needs no change here.
+  const answerValues = answerOptionValues(definition);
+  const formula = `"${answerValues.join(",")}"`;
+  for (
+    let index = 0;
+    answerValues.length > 0 && index < definition.questions.length;
+    index += 1
+  ) {
     const columnNumber = index + 4;
     const columnLetter = sheet.getColumn(columnNumber).letter;
-    const formula = testKey === "bfi" ? '"1,2,3,4,5"' : '"A,B"';
     for (
       let rowNumber = 2;
       rowNumber <= MAX_RESULT_IMPORT_ROWS + 1;
@@ -529,12 +602,12 @@ function addParticipantReferenceSheet(
 export async function buildResultImportTemplate(input: {
   participantId?: string;
   participants?: ParticipantTemplateReference[];
-  testKey?: "bfi" | "mbti";
+  testKey?: ResultImportTestKey;
 }) {
   const workbook = createWorkbook();
-  const testKeys: Array<"bfi" | "mbti"> = input.testKey
+  const testKeys: readonly ResultImportTestKey[] = input.testKey
     ? [input.testKey]
-    : ["bfi", "mbti"];
+    : resultImportTestKeys;
   addInstructionsSheet(workbook, "TalentMap raw-result import", [
     {
       heading: "How to use this workbook",
@@ -548,8 +621,7 @@ export async function buildResultImportTemplate(input: {
     {
       heading: "Answer formats",
       details: [
-        "BFI answers are 1 to 5. The Question Guide explains each scale value.",
-        "MBTI answers are A or B. The Question Guide shows the answer text represented by each letter.",
+        ...testKeys.map((testKey) => resultSheetConfig[testKey].formatNote),
         "submitted_at is optional and should be an Excel date/time or ISO timestamp. duration_seconds is an optional whole number.",
       ],
     },
@@ -840,6 +912,71 @@ function parsedDuration(value: string | number | Date | null) {
     : null;
 }
 
+/**
+ * Per-cell issues for a row that answers the same option on both sides of a
+ * forced-choice group.
+ *
+ * Ipsative scoring reads a group as the difference between the word chosen as
+ * most like the respondent and the word chosen as least like them, so the same
+ * word on both sides is not a preference but a contradiction that nets to zero.
+ * Scoring tolerates it so that an already-stored result still renders, which is
+ * why this cannot be left to the import service's `score()` call: an equal pair
+ * would score cleanly and import silently. It is reported here, beside the other
+ * per-cell answer checks, so the uploader is told which cell to change.
+ *
+ * Generic by design - an instrument opts in with `exclusiveWithinGroup` and
+ * describes its own screens with `forcedChoiceGroups`, so no instrument is named
+ * here - and the rule itself comes from `@/tests/shared/forced-choice`, the single
+ * implementation the grid UI, draft save, and submit also call.
+ */
+function forcedChoiceConflictIssues(
+  definition: TestDefinition,
+  sheetName: string,
+  rowNumber: number,
+  answers: AnswerMap,
+): SpreadsheetIssue[] {
+  if (!definition.exclusiveWithinGroup) {
+    return [];
+  }
+
+  const questionNumbers = new Map(
+    definition.questions.map((question) => [question.id, question.no]),
+  );
+
+  return forcedChoiceGroupConflicts(
+    definition.forcedChoiceGroups ?? [],
+    answers,
+  ).flatMap<SpreadsheetIssue>((conflict) => {
+    const mostNumber = questionNumbers.get(conflict.mostQuestionId);
+    const leastNumber = questionNumbers.get(conflict.leastQuestionId);
+
+    if (mostNumber === undefined || leastNumber === undefined) {
+      // A group naming ids that are not in the item bank is a definition bug,
+      // not an uploader mistake. Report the row rather than guessing a column,
+      // so the workbook still cannot import.
+      return [
+        {
+          sheet: sheetName,
+          row: rowNumber,
+          message: `Group ${conflict.group} cannot use the same word for Most and Least.`,
+        },
+      ];
+    }
+
+    // Anchored on the Least cell and named against the Most cell: both cells are
+    // individually valid, so the issue has to point at one cell to change and
+    // say which other cell it clashes with.
+    return [
+      {
+        sheet: sheetName,
+        row: rowNumber,
+        column: questionColumn(leastNumber),
+        message: `Group ${conflict.group} cannot use the same word for Most and Least. Change this cell or ${questionColumn(mostNumber)}.`,
+      },
+    ];
+  });
+}
+
 export async function parseResultImportWorkbook(
   buffer: Buffer,
   forcedParticipantId?: string,
@@ -848,7 +985,7 @@ export async function parseResultImportWorkbook(
   const issues: SpreadsheetIssue[] = [];
   const rows: ResultImportRow[] = [];
 
-  for (const testKey of ["bfi", "mbti"] as const) {
+  for (const testKey of resultImportTestKeys) {
     const config = resultSheetConfig[testKey];
     const sheet = workbook.getWorksheet(config.sheetName);
     if (!sheet) {
@@ -959,6 +1096,14 @@ export async function parseResultImportWorkbook(
           });
         }
       }
+      issues.push(
+        ...forcedChoiceConflictIssues(
+          definition,
+          sheet.name,
+          rowNumber,
+          answers,
+        ),
+      );
       if (submittedAt && durationSeconds !== null) {
         rows.push({
           sheet: sheet.name,
@@ -1016,8 +1161,10 @@ function addExportReadMe(workbook: ExcelJS.Workbook, resultCount: number) {
       heading: "Workbook contents",
       details: [
         `Results contains one clean summary row for each of the ${resultCount.toLocaleString("en-US")} exported assessments.`,
-        "Dimension Scores contains normalized BFI trait scores and MBTI dimension counts for analysis and pivoting.",
-        "Analysis contains readable platform-generated result and interpretation fields without JSON blobs.",
+        "Dimension Scores contains normalized BFI trait scores, MBTI dimension counts, and the DISC Most, Least, and change tallies with every DISC graph's intensity and segment.",
+        "DISC intensity is the plotted height, 1 to 28; the segment is that intensity in fours. public_ is Graph I (Most), private_ Graph II (Least), the unprefixed pair Graph III (Change).",
+        "Analysis contains readable platform-generated result and interpretation fields without JSON blobs, including one row per DISC graph with its segment numbers and derived pattern.",
+        "The report section of Analysis carries the printed DISC report's field list, Segment and Pattern through to Description, for operators migrating from an existing DiSC report.",
         "Raw Answers contains one row per question, including the prompt, selected value, label, and recorded question time.",
       ],
     },
@@ -1028,6 +1175,315 @@ function addExportReadMe(workbook: ExcelJS.Workbook, resultCount: number) {
       ],
     },
   ]);
+}
+
+function numericValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function plainText(value: unknown) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function scoreSummaryDimensions(row: DashboardResultDetailDto) {
+  return Array.isArray(row.scoreSummary?.dimensions)
+    ? row.scoreSummary.dimensions
+    : [];
+}
+
+/**
+ * Structured arrays that are exported through their own sheet or row shape.
+ * Passing them through readableValue would flatten nested objects into an
+ * unreadable blob, which is the one thing this sheet promises not to do.
+ */
+/**
+ * Fields of a stored result that already have a purpose-built rendering
+ * elsewhere in the workbook, so dumping them again here would only duplicate.
+ *
+ * `patternDetail` is the DISC pattern's nine authored narrative fields. The
+ * report section above prints every one of them under the printed report's own
+ * label - "Judges others by", not `judgesOthersBy` - so leaving it in would repeat
+ * nine paragraphs under the machine name a few rows later.
+ */
+const analysisStructuredFields = new Set([
+  "traitProfiles",
+  "dimensionProfiles",
+  "graphs",
+  "imagePath",
+  "patternDetail",
+]);
+
+function readableAnalysisEntries(
+  section: string,
+  source: Record<string, unknown> | null,
+) {
+  return Object.entries(source ?? {})
+    .filter(([field]) => !analysisStructuredFields.has(field))
+    .map(([field, value]) => ({
+      section,
+      field,
+      content: readableValue(value),
+    }));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/** A DISC segment tuple always reads in the instrument's fixed D-I-S-C order. */
+const discSegmentOrder: DiscDimensionCode[] = ["D", "I", "S", "C"];
+
+/**
+ * The stored DISC graphs, as loose records.
+ *
+ * The export reads a JSONB payload rather than a scored object, so nothing here
+ * may assume a shape: a retention-emptied record, or one written by an older
+ * build, has to fall through to an empty list instead of throwing mid-workbook.
+ */
+function discGraphRecords(row: DashboardResultDetailDto) {
+  const graphs = Array.isArray(row.scoredResult?.graphs)
+    ? row.scoredResult.graphs
+    : [];
+
+  return graphs.flatMap((graph) => {
+    const record = asRecord(graph);
+    return record === null ? [] : [record];
+  });
+}
+
+/** This graph's segments as "6-4-2-4", or "" when the record has none. */
+function discSegmentTuple(graph: Record<string, unknown>) {
+  const stored = plainText(graph.segmentLabel);
+
+  if (stored) {
+    return stored;
+  }
+
+  // Results written before the segment label existed still carry a segment on
+  // every point, so the tuple is rebuilt rather than left blank.
+  const points = Array.isArray(graph.points) ? graph.points : [];
+  const byCode = new Map<string, number>();
+  for (const pointValue of points) {
+    const point = asRecord(pointValue);
+    const segment = point === null ? null : numericValue(point.segment);
+    if (point !== null && segment !== null) {
+      byCode.set(plainText(point.code), segment);
+    }
+  }
+
+  return discSegmentOrder.every((code) => byCode.has(code))
+    ? discSegmentOrder.map((code) => byCode.get(code)).join("-")
+    : "";
+}
+
+/**
+ * The perceived-graph segment tuple as the summary alone records it, for a
+ * result stored before the graphs carried their own segments.
+ */
+function discSummarySegmentTuple(summary: Record<string, unknown> | null) {
+  const segments = asRecord(summary?.segments);
+  const values = discSegmentOrder.map((code) => numericValue(segments?.[code]));
+
+  return values.every((segment) => segment !== null) ? values.join("-") : "";
+}
+
+/**
+ * TalentMap's derived pattern for one graph, as "Driving Mobilizer (DI)".
+ *
+ * This is never presented as the DiSC Classic classical-pattern name: that
+ * assignment comes from a licensed table this product does not hold, so every
+ * surface that prints this string, the export included, has to say whose
+ * derivation it is.
+ */
+function discGraphPattern(graph: Record<string, unknown>) {
+  const name = plainText(graph.patternName);
+  const key = plainText(graph.patternKey);
+
+  if (!name) {
+    return "";
+  }
+
+  return key ? `${name} (${key})` : name;
+}
+
+/**
+ * One readable row per DISC graph. The three graphs plot the Most, Least, and
+ * change tallies, so this keeps each graph's name, caption, segment numbers,
+ * derived pattern, and plotted points in the export while the numbers stay
+ * pivotable on Dimension Scores.
+ */
+function graphAnalysisEntries(row: DashboardResultDetailDto) {
+  const labels = new Map<string, string>();
+  for (const dimensionValue of scoreSummaryDimensions(row)) {
+    const dimension = dimensionValue as Record<string, unknown>;
+    const key = plainText(dimension.key);
+    if (key) {
+      labels.set(key, plainText(dimension.label ?? dimension.code ?? key));
+    }
+  }
+
+  return discGraphRecords(row).flatMap((graph) => {
+    const key = plainText(graph.key);
+    const points = Array.isArray(graph.points) ? graph.points : [];
+    if (!key || !points.length) {
+      return [];
+    }
+    const segmentTuple = discSegmentTuple(graph);
+    const pattern = discGraphPattern(graph);
+    const lines = points.map((pointValue) => {
+      const point = (asRecord(pointValue) ?? {}) as Record<string, unknown>;
+      const pointKey = plainText(point.key);
+      const code = plainText(point.code);
+      const label = labels.get(pointKey) || code || pointKey;
+      const value = numericValue(point.value);
+      const segment = numericValue(point.segment);
+      // Intensity landed after the first DISC results were stored, and the
+      // score type guard does not check for it, so an older record prints the
+      // line without it rather than printing "undefined".
+      const intensity = numericValue(point.intensity);
+      return `${label}${code ? ` (${code})` : ""}: ${value ?? "—"}${
+        segment === null ? "" : ` · segment ${segment}`
+      }${intensity === null ? "" : ` · intensity ${intensity} of 28`}`;
+    });
+    return [
+      {
+        section: "result",
+        field: `graph_${key}`,
+        content: [
+          plainText(graph.label),
+          plainText(graph.caption),
+          segmentTuple ? `Segment numbers (D-I-S-C): ${segmentTuple}` : "",
+          pattern
+            ? `TalentMap pattern: ${pattern}. TalentMap's own derivation from these four segments, not the DiSC Classic classical pattern name.`
+            : "",
+          ...lines,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+    ];
+  });
+}
+
+/**
+ * The nine authored strings behind a pattern, for a stored pattern key.
+ *
+ * Nothing checks a persisted `patternKey` beyond it being a string, so a record
+ * written by a different build can name a pattern this one does not have. An
+ * unknown key returns null and those rows are left out rather than exported as
+ * blanks or invented.
+ */
+function discPatternDetail(patternKey: string): DiscPatternProfile | null {
+  return Object.hasOwn(discPatternProfiles, patternKey)
+    ? discPatternProfiles[patternKey as DiscPatternKey]
+    : null;
+}
+
+/**
+ * The printed DISC report's field list, in its order and under its own labels.
+ *
+ * An operator moving off an existing DiSC report looks for "Judges others by",
+ * not for `judgesOthersBy`, so this section is keyed by the printed label while
+ * the rest of the sheet stays keyed by the payload field it came from. The
+ * `section` column is what tells the two apart.
+ *
+ * Every field is read from the stored result where the record has it. Scoring
+ * writes the nine authored fields onto `result.patternDetail`, so an export says
+ * what the reader of that result was actually shown; the lookup by pattern key is
+ * only the fallback for a record stored before that field existed. Doing the
+ * lookup at all is something this module may do and a participant-facing
+ * component may not, because it would carry the item bank into the browser.
+ */
+function discReportFieldEntries(row: DashboardResultDetailDto) {
+  if (row.testKey !== "disc") {
+    return [];
+  }
+
+  const summary = asRecord(row.scoreSummary);
+  const patternKey = plainText(summary?.patternKey);
+  const authored = discPatternDetail(patternKey);
+  const stored = asRecord(row.scoredResult?.patternDetail);
+  const narrative = (field: keyof DiscPatternNarrative) =>
+    plainText(stored?.[field]) || plainText(authored?.[field]);
+  const perceived = discGraphRecords(row).find(
+    (graph) => plainText(graph.key) === "perceived",
+  );
+  const segmentTuple =
+    perceived === undefined
+      ? discSummarySegmentTuple(summary)
+      : discSegmentTuple(perceived);
+  const patternName = plainText(row.scoredResult?.name);
+
+  const rows = [
+    {
+      label: "Segment",
+      value: segmentTuple,
+      note: "Dominance, Influence, Steadiness, Conscientiousness in that order, each 1 to 7, read from Graph III: Change.",
+    },
+    {
+      label: "Pattern",
+      value:
+        patternName && patternKey
+          ? `${patternName} (${patternKey})`
+          : patternName,
+      note: "TalentMap's own derivation from the four segments above, not the DiSC Classic classical pattern name.",
+    },
+    { label: "Emotions", value: narrative("emotionalTone") },
+    { label: "Goal", value: narrative("motivation") },
+    { label: "Judges others by", value: narrative("judgesOthersBy") },
+    {
+      label: "Influences others by",
+      value: narrative("influencesOthersBy"),
+    },
+    {
+      label: "Value to the organization",
+      value: narrative("organizationValue"),
+    },
+    { label: "Overuses", value: narrative("overuses") },
+    { label: "Under pressure", value: narrative("underPressure") },
+    { label: "Fears", value: narrative("fears") },
+    {
+      label: "Would increase effectiveness through",
+      value: narrative("effectiveness"),
+    },
+    { label: "Description", value: plainText(row.scoredResult?.description) },
+  ];
+
+  // A row with no value is dropped rather than exported as "None": an emptied
+  // or unrecognised payload should shorten this section, not fill it with a
+  // column of placeholders.
+  return rows
+    .filter((entry) => entry.value.trim().length > 0)
+    .map((entry) => ({
+      section: "report",
+      field: entry.label,
+      content: entry.note ? `${entry.value}\n${entry.note}` : entry.value,
+    }));
+}
+
+function addAnalysisRow(
+  sheet: Worksheet,
+  row: DashboardResultDetailDto,
+  entry: { section: string; field: string; content: string },
+) {
+  // Fields that carry no value still get their row, spelled out rather than
+  // left as an empty cell: a DISC profile with one elevated dimension has no
+  // secondary dimension, and a dropped row would read as a missing export.
+  const content = entry.content.trim() ? entry.content : "None";
+  const exportRow = sheet.addRow({
+    resultId: row.id,
+    participantId: row.participant?.id ?? "",
+    participantName: safeText(
+      row.participant?.name ?? row.participantReference,
+    ),
+    testKey: row.testKey.toUpperCase(),
+    section: entry.section,
+    field: entry.field,
+    content: safeText(content),
+  });
+  exportRow.height = wrappedRowHeight(wrappedLineCount(content, 105), 180);
 }
 
 function setExportColumns(
@@ -1127,17 +1583,54 @@ export async function buildResultExportWorkbook(
     { header: "average", key: "average", width: 12, numFmt: "0.00" },
     { header: "score_percent", key: "percent", width: 16, numFmt: "0%" },
     { header: "band", key: "band", width: 14 },
+    /*
+     * Everything DISC needs is APPENDED, after the last column this sheet
+     * already had.
+     *
+     * Not a matter of taste. This sheet is shared by every instrument, and an
+     * operator's saved formula or Power Query points at a column LETTER: filing
+     * `code` next to `dimension` and the segments next to `average` would have
+     * moved `score_percent` from L to S and `band` from M to T for BFI and MBTI
+     * exports too, so a percentile formula reading L would silently return a 0-5
+     * mean instead of a percentage - wrong numbers, no error. Appending keeps
+     * every pre-existing column at the position it has always had, and the cost
+     * is only that a DISC reader finds an intensity two columns from its
+     * segment. Add new columns at the end.
+     *
+     * The three intensities are what make the export able to reproduce a graph
+     * at all: a DISC graph plots the intensity, not the segment, so two
+     * dimensions sharing a segment sit at different heights.
+     */
+    { header: "code", key: "code", width: 10 },
+    { header: "most_score", key: "mostScore", width: 14, numFmt: "0" },
+    { header: "least_score", key: "leastScore", width: 14, numFmt: "0" },
+    { header: "change_score", key: "changeScore", width: 14, numFmt: "0" },
+    {
+      header: "public_intensity",
+      key: "publicIntensity",
+      width: 18,
+      numFmt: "0",
+    },
+    { header: "public_segment", key: "publicSegment", width: 16, numFmt: "0" },
+    {
+      header: "private_intensity",
+      key: "privateIntensity",
+      width: 18,
+      numFmt: "0",
+    },
+    {
+      header: "private_segment",
+      key: "privateSegment",
+      width: 16,
+      numFmt: "0",
+    },
+    { header: "intensity", key: "intensity", width: 14, numFmt: "0" },
+    { header: "segment", key: "segment", width: 12, numFmt: "0" },
   ]);
   for (const row of rows) {
-    const dimensions = Array.isArray(row.scoreSummary?.dimensions)
-      ? row.scoreSummary.dimensions
-      : [];
-    for (const dimensionValue of dimensions) {
+    for (const dimensionValue of scoreSummaryDimensions(row)) {
       const dimension = dimensionValue as Record<string, unknown>;
-      const percent =
-        typeof dimension.scorePercent === "number"
-          ? dimension.scorePercent / 100
-          : null;
+      const percent = numericValue(dimension.scorePercent);
       scoresSheet.addRow({
         resultId: row.id,
         participantId: row.participant?.id ?? "",
@@ -1146,23 +1639,29 @@ export async function buildResultExportWorkbook(
         ),
         testKey: row.testKey.toUpperCase(),
         dimension: safeText(dimension.label ?? dimension.code ?? dimension.key),
+        code: safeText(dimension.code),
         selected: safeText(dimension.selected),
-        leftScore:
-          typeof dimension.leftScore === "number" ? dimension.leftScore : null,
-        rightScore:
-          typeof dimension.rightScore === "number"
-            ? dimension.rightScore
-            : null,
-        rawScore:
-          typeof dimension.rawScore === "number" ? dimension.rawScore : null,
-        maxScore:
-          typeof dimension.maxRawScore === "number"
-            ? dimension.maxRawScore
-            : null,
-        average:
-          typeof dimension.average === "number" ? dimension.average : null,
-        percent,
+        leftScore: numericValue(dimension.leftScore),
+        rightScore: numericValue(dimension.rightScore),
+        rawScore: numericValue(dimension.rawScore),
+        maxScore: numericValue(dimension.maxRawScore),
+        average: numericValue(dimension.average),
+        // DISC reports a Most and a Least tally, their difference, and one
+        // segment per graph in place of the BFI's raw score and average.
+        mostScore: numericValue(dimension.mostScore),
+        leastScore: numericValue(dimension.leastScore),
+        changeScore: numericValue(dimension.changeScore),
+        publicSegment: numericValue(dimension.publicSegment),
+        privateSegment: numericValue(dimension.privateSegment),
+        segment: numericValue(dimension.segment),
+        percent: percent === null ? null : percent / 100,
         band: safeText(dimension.band),
+        // 1 to 28, one per graph. A result stored before the intensity scale
+        // landed has none, and numericValue leaves the cell empty rather than
+        // writing a zero that would read as a real floor reading.
+        publicIntensity: numericValue(dimension.publicIntensity),
+        privateIntensity: numericValue(dimension.privateIntensity),
+        intensity: numericValue(dimension.intensity),
       });
     }
   }
@@ -1178,34 +1677,13 @@ export async function buildResultExportWorkbook(
     { header: "content", key: "content", width: 90 },
   ]);
   for (const row of rows) {
-    for (const [section, source] of [
-      ["result", row.scoredResult],
-      ["interpretation", row.interpretation],
-    ] as const) {
-      for (const [field, value] of Object.entries(source ?? {})) {
-        if (field === "traitProfiles" || field === "imagePath") {
-          continue;
-        }
-        const content = readableValue(value);
-        const exportRow = analysisSheet.addRow({
-          resultId: row.id,
-          participantId: row.participant?.id ?? "",
-          participantName: safeText(
-            row.participant?.name ?? row.participantReference,
-          ),
-          testKey: row.testKey.toUpperCase(),
-          section,
-          field,
-          content,
-        });
-        const visualLines = content
-          .split("\n")
-          .reduce(
-            (total, line) => total + Math.max(1, Math.ceil(line.length / 105)),
-            0,
-          );
-        exportRow.height = Math.min(Math.max(28, visualLines * 15 + 8), 180);
-      }
+    for (const entry of [
+      ...discReportFieldEntries(row),
+      ...readableAnalysisEntries("result", row.scoredResult),
+      ...graphAnalysisEntries(row),
+      ...readableAnalysisEntries("interpretation", row.interpretation),
+    ]) {
+      addAnalysisRow(analysisSheet, row, entry);
     }
   }
   analysisSheet.getColumn("content").alignment = {
@@ -1275,7 +1753,7 @@ export function participantTemplateFileName() {
   return "talentmap-participant-import-template.xlsx";
 }
 
-export function resultImportTemplateFileName(testKey?: "bfi" | "mbti") {
+export function resultImportTemplateFileName(testKey?: ResultImportTestKey) {
   return `talentmap-${testKey ? `${testKey}-` : ""}result-import-template.xlsx`;
 }
 

@@ -10,6 +10,7 @@ import { SpreadsheetImportPanel } from "@/components/dashboard/spreadsheet-impor
 import { formatDate } from "@/components/dashboard/status";
 import { getClientParticipantDetail } from "@/services/participant-directory-service";
 import { getClientParticipantFieldDefinitions } from "@/services/participant-field-service";
+import { participantResultTemplateLinks } from "@/services/result-import-tests";
 
 function statusClass(status: string) {
   if (status === "archived") {
@@ -121,16 +122,10 @@ export default async function ParticipantDetailPage({
             description="Upload raw responses for this participant. TalentMap will score and analyze them."
             endpoint="/api/dashboard/import/results"
             participantId={participant.id}
-            templateLinks={[
-              {
-                href: `/api/dashboard/import/templates/results?participantId=${participant.id}&testKey=bfi`,
-                label: "BFI Template",
-              },
-              {
-                href: `/api/dashboard/import/templates/results?participantId=${participant.id}&testKey=mbti`,
-                label: "MBTI Template",
-              },
-            ]}
+            // One button per importable instrument, derived from the same list the
+            // template route validates against, so a new instrument cannot ship
+            // with a working endpoint and no way to reach it.
+            templateLinks={participantResultTemplateLinks(participant.id)}
           />
           <ParticipantAnonymizeForm participantId={participant.id} />
         </div>

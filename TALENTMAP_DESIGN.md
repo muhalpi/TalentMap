@@ -163,6 +163,7 @@ Every assessment records an authoritative total duration from token start to res
 - Pair entity names with colored circular icon wells where it improves scanning.
 - Truncate long secondary text while preserving the primary label.
 - On mobile, place wide tables inside a horizontally scrollable card rather than widening the page.
+- Any element that scrolls horizontally must be reachable by keyboard: give the scroll container `tabIndex={0}`, `role="group"`, an `aria-label` naming what it holds, and a visible focus ring. A browser does not make a scroller focusable on its own, and focusing an ancestor does not let arrow keys drive it, so without this a keyboard user with no pointer cannot see the right-hand half at all.
 - Recent activity should combine a semantic icon, event title, short description, and relative timestamp.
 
 ## Controls and Interaction
@@ -187,7 +188,9 @@ Every assessment records an authoritative total duration from token start to res
 - Maintain at least 4.5:1 contrast for normal text and 3:1 for large text and meaningful UI graphics.
 - Use 44px targets for primary result-page controls where space allows; never go below the WCAG AA 24px minimum.
 - Maintain readable contrast on the navy sidebar and muted metadata.
-- Every chart needs a useful accessible label.
+- Every chart needs a useful accessible label. A chart drawn as `role="img"` hides its own text from assistive technology, so its label has to carry the whole dataset, and every number it plots must also appear as real text elsewhere on the page.
+- A shaded band, a highlighted region, or a series must never be identified by colour alone. Give it a second encoding — a boundary rule, a label, or a printed number — and check that encoding's contrast against the shaded background as well as against white.
+- A horizontal scroll container is a keyboard trap in reverse: see the rule under Tables and Activity Lists.
 - Every icon-only action needs an `aria-label` or screen-reader label.
 - Keyboard focus must remain visible.
 - Verify desktop and mobile widths for page-level overflow.

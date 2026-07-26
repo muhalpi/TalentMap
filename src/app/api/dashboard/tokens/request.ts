@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const dashboardTokenRequestSchema = z
   .object({
-    testKey: z.enum(["mbti", "bfi"]),
+    testKey: z.enum(["mbti", "bfi", "disc"]),
     participantId: z.string().uuid().optional(),
     participant_id: z.string().uuid().optional(),
   })

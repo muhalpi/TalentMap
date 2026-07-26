@@ -6,6 +6,8 @@ import { clientTestQuotas, clients, participants, tests } from "@/db/schema";
 import {
   parseParticipantImportWorkbook,
   parseResultImportWorkbook,
+  resultSheetName,
+  type ResultImportTestKey,
   type SpreadsheetIssue,
 } from "@/services/spreadsheet-workbook";
 import {
@@ -197,7 +199,7 @@ interface PreparedResultImport {
   rowKey: string;
   participantId: string;
   testId: string;
-  testKey: "bfi" | "mbti";
+  testKey: ResultImportTestKey;
   submittedAt: string;
   durationSeconds: number;
   rawAnswers: Record<string, string>;
@@ -303,7 +305,7 @@ export async function importResultsFromWorkbook(input: {
     ]),
   );
   const now = new Date();
-  const importCounts = new Map<string, number>();
+  const importCounts = new Map<ResultImportTestKey, number>();
   for (const row of parsed.rows) {
     const participant = participantsById.get(row.participantId);
     if (!participant || participant.status !== "active") {
@@ -517,8 +519,4 @@ export async function importResultsFromWorkbook(input: {
     );
   }
   return { imported };
-}
-
-function resultSheetName(testKey: string) {
-  return testKey === "bfi" ? "BFI Results" : "MBTI Results";
 }

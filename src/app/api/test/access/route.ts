@@ -8,6 +8,7 @@ import {
   participantSessionCookieOptions,
   type ParticipantSessionAccess,
 } from "@/auth/participant-session";
+import { isDemoTestKey } from "@/lib/demo-test-token";
 import { getParticipantTestContext } from "@/services/participant-service";
 import {
   enforceParticipantAccessRateLimit,
@@ -42,16 +43,24 @@ function isAvailable(
   );
 }
 
+// Demo contexts are only built from the demo token map, so the narrowing below
+// always succeeds today. Returning null instead of casting means a future
+// instrument that gains a demo context without a demo token entry is refused
+// rather than silently stored under a key the session decoder will reject.
 function sessionAccess(
   context: NonNullable<Awaited<ReturnType<typeof getParticipantTestContext>>>,
-): ParticipantSessionAccess {
-  return context.demo
-    ? { kind: "demo", demoKey: context.test.key as "mbti" | "bfi" }
-    : {
-        kind: "assignment",
-        assignmentId: context.token.id,
-        accessVersion: context.token.accessVersion,
-      };
+): ParticipantSessionAccess | null {
+  if (context.demo) {
+    return isDemoTestKey(context.test.key)
+      ? { kind: "demo", demoKey: context.test.key }
+      : null;
+  }
+
+  return {
+    kind: "assignment",
+    assignmentId: context.token.id,
+    accessVersion: context.token.accessVersion,
+  };
 }
 
 export async function POST(request: Request) {
@@ -64,8 +73,10 @@ export async function POST(request: Request) {
     });
 
     const context = await getParticipantTestContext(accessCode);
+    const access =
+      context && isAvailable(context) ? sessionAccess(context) : null;
 
-    if (!context || !isAvailable(context)) {
+    if (!access) {
       return NextResponse.json(
         { error: "That access code is invalid or unavailable." },
         {
@@ -79,7 +90,6 @@ export async function POST(request: Request) {
       { ok: true },
       { headers: { "Cache-Control": "no-store" } },
     );
-    const access = sessionAccess(context);
 
     response.cookies.set(
       PARTICIPANT_SESSION_COOKIE,

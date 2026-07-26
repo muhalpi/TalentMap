@@ -7,14 +7,18 @@ import { getClientParticipants } from "@/services/participant-directory-service"
 import {
   buildResultImportTemplate,
   resultImportTemplateFileName,
+  resultImportTestKeys,
 } from "@/services/spreadsheet-workbook";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// The accepted instruments are read from the spreadsheet layer's own list rather
+// than repeated here, so the route cannot drift from the set of instruments the
+// template builder and the import parser actually support.
 const querySchema = z.object({
   participantId: z.string().uuid().optional(),
-  testKey: z.enum(["bfi", "mbti"]).optional(),
+  testKey: z.enum(resultImportTestKeys).optional(),
 });
 
 export async function GET(request: Request) {

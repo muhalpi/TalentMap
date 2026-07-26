@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ArrowLeft, ChevronDown, Download } from "lucide-react";
 
 import { BfiResultReport } from "@/components/dashboard/bfi-result-report";
+import { DiscResultReport } from "@/components/dashboard/disc-result-report";
 import { ResultTableOfContents } from "@/components/dashboard/result-table-of-contents";
 import { ResultImportProvenance } from "@/components/dashboard/result-source-badge";
 import { formatDate } from "@/components/dashboard/status";
@@ -243,6 +244,21 @@ export function ResultDetailReport({
   if (result.testKey === "bfi") {
     return (
       <BfiResultReport
+        result={result}
+        backHref={backHref}
+        exportHref={resolvedExportHref}
+        participantHref={resolvedParticipantHref}
+      />
+    );
+  }
+
+  // DISC has to be caught before the MBTI fallthrough below: a DISC payload has
+  // no type letters, so the fallthrough would render an empty type report. The
+  // DISC report reads the stored payload defensively and degrades on its own
+  // when the record has been emptied or predates the current schema.
+  if (result.testKey === "disc") {
+    return (
+      <DiscResultReport
         result={result}
         backHref={backHref}
         exportHref={resolvedExportHref}

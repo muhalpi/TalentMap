@@ -17,6 +17,7 @@ import {
   reissueClientParticipantAccess,
 } from "../src/services/token-service";
 import { bfiDefinition } from "../src/tests/instruments/bfi/definition";
+import { discDefinition } from "../src/tests/instruments/disc/definition";
 import { mbtiDefinition } from "../src/tests/instruments/mbti/definition";
 import type { TestDefinition } from "../src/tests/shared/types";
 
@@ -250,7 +251,7 @@ async function seed() {
   const clientUser = await getOrCreateClientUser(client.clientId);
   await ensureParticipantFields(client.clientId, clientUser.id);
   const participant = await getOrCreateSeedParticipant(client.clientId);
-  const definitions = [mbtiDefinition, bfiDefinition];
+  const definitions = [mbtiDefinition, bfiDefinition, discDefinition];
   const seededTests = [];
 
   for (const definition of definitions) {

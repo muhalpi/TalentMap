@@ -31,10 +31,34 @@ interface ParticipantConsentGateProps {
     description: string;
     estimatedMinutes: number;
     questionCount: number;
+    /**
+     * How this instrument's unit of work is named, for an instrument whose screen
+     * is not one question.
+     *
+     * Absent for every single-question instrument, which is what keeps this
+     * screen's wording byte for byte what BFI and MBTI participants have always
+     * read. A forced-choice instrument sets it because "28 questions" would be
+     * wrong twice over: a screen is a group of four words, and the instrument
+     * defines 56 questions behind those 28 screens.
+     */
+    itemWording?: {
+      /** Stat-tile label for the count, e.g. "Word groups". */
+      statLabel: string;
+      /** Plural noun for the count in the sentence, e.g. "word groups". */
+      plural: string;
+      /** How to answer, completing "There are no right or wrong answers—". */
+      guidance: string;
+    };
   };
   contractEndsAt: string;
   retentionGraceDays: number;
 }
+
+const defaultItemWording = {
+  statLabel: "Questions",
+  plural: "questions",
+  guidance: "choose the option that best reflects you.",
+};
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-US", {
@@ -53,6 +77,7 @@ export function ParticipantConsentGate({
   retentionGraceDays,
 }: ParticipantConsentGateProps) {
   const router = useRouter();
+  const itemWording = test.itemWording ?? defaultItemWording;
   const [accepted, setAccepted] = useState(false);
   const [declined, setDeclined] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,7 +244,7 @@ export function ParticipantConsentGate({
                 icon: UserRound,
               },
               {
-                label: "Questions",
+                label: itemWording.statLabel,
                 value: String(test.questionCount),
                 icon: FileQuestion,
               },
@@ -250,7 +275,7 @@ export function ParticipantConsentGate({
           </dl>
 
           <p className="m-4 rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-3 text-sm leading-6 text-slate-700 sm:mx-5 sm:mb-5">
-            {`You'll answer ${test.questionCount} questions in about ${test.estimatedMinutes} minutes. There are no right or wrong answers—choose the option that best reflects you.`}
+            {`You'll answer ${test.questionCount} ${itemWording.plural} in about ${test.estimatedMinutes} minutes. There are no right or wrong answers—${itemWording.guidance}`}
           </p>
         </section>
 

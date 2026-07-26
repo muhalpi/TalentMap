@@ -1,6 +1,7 @@
 const demoTestKeys = {
   "demo-mbti": "mbti",
   "demo-bfi": "bfi",
+  "demo-disc": "disc",
 } as const;
 
 export type DemoTestKey = (typeof demoTestKeys)[keyof typeof demoTestKeys];
